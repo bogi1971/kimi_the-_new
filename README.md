@@ -1,4 +1,4 @@
-# 🐂 Elite Bull Scanner Pro V4.3
+# 🐂 kimi_the-_new
 
 **Institutioneller Pullback-Scanner** mit bilingualer News-Analyse (DE/EN).
 
