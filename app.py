@@ -777,8 +777,7 @@ st.markdown(f"""
 
 # Titel und Caption
 st.title('🐂 Elite Bull Scanner Pro V5.5')
-st.caption(f\"3-Key Alpha Rotation | {len(alpha_manager.keys)} Keys aktiv | Market Clock | Real-time ET\")\n\n# Warnung wenn Markt geschlossen
-if not clock['is_open']:\n    st.warning(f\"⚠️ Market is **{clock['status']}**! Next session: {clock['next_event']} ET | Showing last available data.\")\n\n# AUTO REFRESH LOGIK
+st.caption(f"3-Key Alpha Rotation | {len(alpha_manager.keys)} Keys aktiv | Market Clock | Real-time ET") 
 if st.session_state.get('auto_refresh', False):
     last_refresh = st.session_state.get('last_auto_refresh', 0)
     current_time = time.time()
