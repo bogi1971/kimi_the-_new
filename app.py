@@ -11,20 +11,20 @@ from io import StringIO
 import textwrap
 import warnings
 import pytz
+import threading
 warnings.filterwarnings('ignore')
 
 # =============================================================================
 # KONFIGURATION
 # =============================================================================
 
-st.set_page_config(layout="wide", page_title="Elite Bull Scanner Pro V5.1 - API Rotation", page_icon="🐂")
+st.set_page_config(layout="wide", page_title="Elite Bull Scanner Pro V5.2 - Auto Refresh", page_icon="🐂")
 
 # API KEYS (Secrets oder direkt)
 try:
     TELEGRAM_BOT_TOKEN = st.secrets["telegram"]["bot_token"]
     TELEGRAM_CHAT_ID = st.secrets["telegram"]["chat_id"]
     FINNHUB_API_KEY = st.secrets["api_keys"]["finnhub"]
-    # 3 Alpha Vantage Keys für Rotation
     ALPHA_VANTAGE_KEYS = [
         st.secrets["api_keys"]["alpha_vantage_1"],
         st.secrets["api_keys"]["alpha_vantage_2"],
@@ -44,23 +44,15 @@ except:
 # KONFIGURATION
 MIN_PULLBACK_PERCENT = 0.10
 MAX_PULLBACK_PERCENT = 0.25
+AUTO_REFRESH_INTERVAL = 30  # Sekunden
 
-# API LIMITS (kostenlose Pläne)
-API_LIMITS = {
-    'finnhub': {'calls_per_min': 60, 'calls_per_hour': 1000},
-    'alpha_vantage': {'calls_per_min': 5, 'calls_per_day': 500},  # Pro Key!
-    'yahoo': {'calls_per_hour': 2000}
-}
-
-# CACHE TTL (Sekunden)
 CACHE_TTL = {
-    'news': 600,      # 10 Minuten
-    'fundamentals': 3600,  # 1 Stunde
-    'sentiment': 1800,     # 30 Minuten
-    'structure': 300       # 5 Minuten
+    'news': 600,
+    'fundamentals': 3600,
+    'sentiment': 1800,
+    'structure': 300
 }
 
-# WATCHLIST
 DEFAULT_WATCHLIST = sorted(list(set([
     "ABBV", "ACHV", "ACRS", "ADMA", "ALDX", "ALNY", "AMD", "AMGN", "AMRN", "APLS", "AQST", "ASND", 
     "ATOS", "ATRA", "AVXL", "AZN", "BCRX", "BEAM", "BIIB", "BLTE", "BMRN", "BMY", "BNTX", "CELC", 
@@ -81,11 +73,19 @@ if 'api_stats' not in st.session_state:
     st.session_state['api_stats'] = {
         'finnhub': 0, 
         'alpha_vantage': 0, 
-        'alpha_key_index': 0,  # Aktueller Key Index
+        'alpha_key_index': 0,
         'yahoo': 0, 
         'cache_hits': 0,
         'alpha_rotation_count': 0
     }
+if 'scan_results' not in st.session_state:
+    st.session_state['scan_results'] = []
+if 'last_scan_time' not in st.session_state:
+    st.session_state['last_scan_time'] = None
+if 'auto_refresh' not in st.session_state:
+    st.session_state['auto_refresh'] = False
+if 'refresh_count' not in st.session_state:
+    st.session_state['refresh_count'] = 0
 
 # =============================================================================
 # CSS STYLING
@@ -117,10 +117,18 @@ st.markdown("""
                   border-radius: 8px; font-size: 0.7rem; display: inline-block; margin: 2px; }
     .cache-badge { background: linear-gradient(45deg, #11998e, #38ef7d); color: white; padding: 2px 6px; 
                    border-radius: 6px; font-size: 0.65rem; display: inline-block; margin: 2px; }
-    .api-badge { background: linear-gradient(45deg, #4ecdc4, #44a3aa); color: white; padding: 2px 8px; 
-                 border-radius: 8px; font-size: 0.75rem; display: inline-block; margin: 3px 0; }
     .rotation-badge { background: linear-gradient(45deg, #ff6b6b, #feca57); color: white; padding: 2px 8px; 
                       border-radius: 8px; font-size: 0.7rem; display: inline-block; margin: 2px; }
+    .live-indicator { 
+        display: inline-block; 
+        width: 10px; 
+        height: 10px; 
+        background: #00FF00; 
+        border-radius: 50%; 
+        animation: blink 1s infinite;
+        margin-right: 5px;
+    }
+    @keyframes blink { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
     
     .stop-loss { color: #ff9999; font-weight: bold; font-size: 0.9rem; border: 1px solid #ff4b4b; 
                  border-radius: 4px; padding: 2px 8px; display: inline-block; }
@@ -138,6 +146,13 @@ st.markdown("""
                      border: 1px solid #444; display: inline-block; margin: 2px; }
     .key-active { background: #1e3a1e; border-color: #00FF00; color: #00FF00; }
     .key-exhausted { background: #3a1e1e; border-color: #ff4b4b; color: #ff4b4b; }
+    .refresh-info { 
+        background: linear-gradient(90deg, #1a1a2e, #16213e); 
+        padding: 10px; 
+        border-radius: 8px; 
+        border-left: 4px solid #00FF00;
+        margin: 10px 0;
+    }
     </style>
 """, unsafe_allow_html=True)
 
@@ -146,8 +161,6 @@ st.markdown("""
 # =============================================================================
 
 class SmartCache:
-    """Intelligentes Caching mit TTL"""
-    
     def __init__(self):
         self.cache = {}
         self.timestamps = {}
@@ -165,15 +178,7 @@ class SmartCache:
     def set(self, key, value):
         self.cache[key] = value
         self.timestamps[key] = time.time()
-    
-    def clear_expired(self):
-        now = time.time()
-        expired = [k for k, v in self.timestamps.items() if now - v > 3600]
-        for k in expired:
-            del self.cache[k]
-            del self.timestamps[k]
 
-# Cache-Instanzen
 news_cache = SmartCache()
 fundamentals_cache = SmartCache()
 structure_cache = SmartCache()
@@ -183,8 +188,6 @@ structure_cache = SmartCache()
 # =============================================================================
 
 class AlphaVantageManager:
-    """Verwaltet 3 Alpha Vantage Keys mit Rotation"""
-    
     def __init__(self, keys):
         self.keys = [k for k in keys if k and "DEIN_" not in k]
         self.current_index = 0
@@ -199,43 +202,34 @@ class AlphaVantageManager:
             }
     
     def get_current_key(self):
-        """Gibt aktuellen Key zurück"""
         if not self.keys:
             return None
         return self.keys[self.current_index]
     
     def rotate_key(self):
-        """Wechselt zum nächsten verfügbaren Key"""
         if not self.keys:
             return None
-        
-        original_index = self.current_index
         
         for _ in range(len(self.keys)):
             self.current_index = (self.current_index + 1) % len(self.keys)
             if not self.limiters[self.current_index]['exhausted']:
-                st.session_state['api_stats']['alpha_rotation_count'] += 1
+                if 'api_stats' in st.session_state:
+                    st.session_state['api_stats']['alpha_rotation_count'] = st.session_state['api_stats'].get('alpha_rotation_count', 0) + 1
                 return self.get_current_key()
-        
-        # Alle Keys exhausted
         return None
     
     def can_call(self, key_index=None):
-        """Prüft ob aktueller Key (oder spezifischer Key) verfügbar"""
         if not self.keys:
             return False
         
         idx = key_index if key_index is not None else self.current_index
         limiter = self.limiters[idx]
-        
         now = time.time()
         
-        # Minuten-Limit prüfen (5 calls/min)
         limiter['calls_per_min'] = [c for c in limiter['calls_per_min'] if now - c < 60]
         if len(limiter['calls_per_min']) >= 5:
             return False
         
-        # Tages-Limit prüfen (500 calls/day)
         if limiter['calls_today'] >= 500:
             limiter['exhausted'] = True
             return False
@@ -243,18 +237,15 @@ class AlphaVantageManager:
         return True
     
     def record_call(self, key_index=None):
-        """Speichert einen API Call"""
         idx = key_index if key_index is not None else self.current_index
         limiter = self.limiters[idx]
-        
         limiter['calls_per_min'].append(time.time())
         limiter['calls_today'] += 1
-        st.session_state['api_stats']['alpha_vantage'] += 1
-        
+        if 'api_stats' in st.session_state:
+            st.session_state['api_stats']['alpha_vantage'] = st.session_state['api_stats'].get('alpha_vantage', 0) + 1
         return limiter['calls_today']
     
     def get_status(self):
-        """Gibt Status aller Keys zurück"""
         status = []
         for i, key in enumerate(self.keys):
             limiter = self.limiters[i]
@@ -270,8 +261,6 @@ class AlphaVantageManager:
         return status
 
 class RateLimiter:
-    """Trackt API-Aufrufe und enforced Limits"""
-    
     def __init__(self, max_calls, window_seconds):
         self.max_calls = max_calls
         self.window = window_seconds
@@ -291,7 +280,6 @@ class RateLimiter:
         self.calls = [c for c in self.calls if now - c < self.window]
         return f"{len(self.calls)}/{self.max_calls}"
 
-# Rate Limiter initialisieren
 finnhub_limiter = RateLimiter(60, 60)
 alpha_manager = AlphaVantageManager(ALPHA_VANTAGE_KEYS)
 yahoo_limiter = RateLimiter(100, 60)
@@ -336,13 +324,10 @@ def get_market_context():
         return None
 
 # =============================================================================
-# TECHNISCHE ANALYSE (MIT CACHE)
+# TECHNISCHE ANALYSE
 # =============================================================================
 
 def analyze_structure(df, symbol=None):
-    """Higher Highs / Higher Lows mit optionalen Cache"""
-    
-    # Cache für Struktur (wenn Symbol gegeben)
     if symbol:
         cache_key = f"structure_{symbol}"
         cached = structure_cache.get(cache_key, CACHE_TTL['structure'])
@@ -360,8 +345,6 @@ def analyze_structure(df, symbol=None):
                 swing_highs.append((i, highs[i]))
             if lows[i] < lows[i-1] and lows[i] < lows[i-2] and lows[i] < lows[i+1] and lows[i] < lows[i+2]:
                 swing_lows.append((i, lows[i]))
-        
-        result = None
         
         if len(swing_highs) >= 2 and len(swing_lows) >= 2:
             hh = swing_highs[-1][1] > swing_highs[-2][1]
@@ -389,10 +372,8 @@ def analyze_structure(df, symbol=None):
                 'last_swing_high': df['High'].tail(20).max()
             }
         
-        # Cache speichern
         if symbol:
             structure_cache.set(cache_key, result)
-        
         return result
         
     except:
@@ -402,45 +383,16 @@ def analyze_structure(df, symbol=None):
             'last_swing_high': df['High'].tail(20).max()
         }
 
-def analyze_volume_profile(df, lookback=20):
-    """Volumen-Profil Analyse"""
-    try:
-        recent = df.tail(lookback)
-        typical_price = (recent['High'] + recent['Low'] + recent['Close']) / 3
-        vwap = (typical_price * recent['Volume']).sum() / recent['Volume'].sum()
-        
-        price_volume = {}
-        for i in range(len(recent)):
-            price = round(recent['Close'].iloc[i], 2)
-            vol = recent['Volume'].iloc[i]
-            price_volume[price] = price_volume.get(price, 0) + vol
-        
-        poc = max(price_volume.items(), key=lambda x: x[1])[0] if price_volume else vwap
-        
-        buy_vol = recent[recent['Close'] > recent['Open']]['Volume'].sum()
-        sell_vol = recent[recent['Close'] < recent['Open']]['Volume'].sum()
-        delta = (buy_vol - sell_vol) / (buy_vol + sell_vol) if (buy_vol + sell_vol) > 0 else 0
-        
-        return {
-            'vwap': vwap,
-            'poc': poc,
-            'delta': delta,
-            'buy_pressure': buy_vol > sell_vol * 1.2
-        }
-    except:
-        return None
-
 # =============================================================================
 # SMART API FUNKTIONEN
 # =============================================================================
 
 def get_finnhub_news_smart(symbol):
-    """Finnhub News mit Caching und Rate Limiting"""
     cache_key = f"fh_news_{symbol}"
-    
     cached = news_cache.get(cache_key, CACHE_TTL['news'])
     if cached is not None:
-        st.session_state['api_stats']['cache_hits'] += 1
+        if 'api_stats' in st.session_state:
+            st.session_state['api_stats']['cache_hits'] = st.session_state['api_stats'].get('cache_hits', 0) + 1
         return cached, True
     
     if not finnhub_limiter.can_call():
@@ -463,7 +415,8 @@ def get_finnhub_news_smart(symbol):
         
         response = requests.get(url, params=params, timeout=10)
         finnhub_limiter.record_call()
-        st.session_state['api_stats']['finnhub'] += 1
+        if 'api_stats' in st.session_state:
+            st.session_state['api_stats']['finnhub'] = st.session_state['api_stats'].get('finnhub', 0) + 1
         
         if response.status_code == 200:
             data = response.json()
@@ -472,29 +425,23 @@ def get_finnhub_news_smart(symbol):
                 result = data[:5]
                 news_cache.set(cache_key, result)
                 return result, False
-        
-        elif response.status_code == 429:
-            st.warning(f"⚠️ Finnhub Limit für {symbol}")
-            
+                
     except Exception as e:
         pass
     
     return [], False
 
 def get_alpha_vantage_smart(symbol):
-    """Alpha Vantage mit 3-Key Rotation, Caching und Rate Limiting"""
     cache_key = f"av_fund_{symbol}"
-    
     cached = fundamentals_cache.get(cache_key, CACHE_TTL['fundamentals'])
     if cached is not None:
-        st.session_state['api_stats']['cache_hits'] += 1
+        if 'api_stats' in st.session_state:
+            st.session_state['api_stats']['cache_hits'] = st.session_state['api_stats'].get('cache_hits', 0) + 1
         return cached, True
     
-    # Prüfe ob überhaupt Keys verfügbar
     if not alpha_manager.keys:
         return None, False
     
-    # Versuche mit aktuellem Key, rotiere bei Bedarf
     attempts = 0
     max_attempts = len(alpha_manager.keys)
     
@@ -516,13 +463,11 @@ def get_alpha_vantage_smart(symbol):
                 if response.status_code == 200:
                     data = response.json()
                     
-                    # Prüfe auf API Limit Message
                     if 'Note' in data or 'Information' in data:
-                        # Key ist limitiert, rotiere
                         alpha_manager.limiters[alpha_manager.current_index]['exhausted'] = True
                         alpha_manager.rotate_key()
                         attempts += 1
-                        time.sleep(0.5)  # Kurze Pause vor Retry
+                        time.sleep(0.5)
                         continue
                     
                     if 'Symbol' in data:
@@ -540,19 +485,15 @@ def get_alpha_vantage_smart(symbol):
             except Exception as e:
                 pass
         
-        # Kann nicht callen, rotiere
         alpha_manager.rotate_key()
         attempts += 1
     
-    # Alle Keys exhausted
     return None, False
 
 def get_yahoo_news_fallback(symbol):
-    """Yahoo News als Fallback (kein Limit)"""
     try:
         ticker = yf.Ticker(symbol)
         news = ticker.news
-        
         if news:
             return [{
                 'headline': n.get('title'),
@@ -565,12 +506,10 @@ def get_yahoo_news_fallback(symbol):
     return []
 
 # =============================================================================
-# NEWS ANALYSE (TIER-BASIERT)
+# NEWS ANALYSE
 # =============================================================================
 
 def analyze_news_tiered(symbol, tier, prelim_score):
-    """Intelligente News-Analyse basierend auf Tier"""
-    
     keywords_tier1 = [
         'fda approval', 'fda approved', 'phase 3 success', 'merger', 'acquisition', 
         'buyout', 'takeover', 'zulassung', 'übernahmeangebot', 'fusion', 
@@ -586,7 +525,6 @@ def analyze_news_tiered(symbol, tier, prelim_score):
     sources = []
     from_cache = False
     
-    # TIER 1: Finnhub (wenn Limit verfügbar) + Yahoo
     if tier <= 10 and prelim_score > 60:
         fh_news, cached = get_finnhub_news_smart(symbol)
         from_cache = cached
@@ -612,7 +550,6 @@ def analyze_news_tiered(symbol, tier, prelim_score):
                         'source': 'FH'
                     })
     
-    # TIER 2 & 3: Yahoo Fallback
     if not news_items and tier <= 30:
         yh_news = get_yahoo_news_fallback(symbol)
         if yh_news:
@@ -640,14 +577,11 @@ def analyze_news_tiered(symbol, tier, prelim_score):
     return news_items[:3], sources, from_cache
 
 # =============================================================================
-# HAUPTANALYSE (SMART)
+# HAUPTANALYSE
 # =============================================================================
 
 def analyze_smart(symbol, tier, total_tickers, market_context=None):
-    """Intelligente Analyse mit API-Priorisierung"""
-    
     try:
-        # === STUFE 1: BASIS ANALYSE (Yahoo - alle Tickers) ===
         ticker = yf.Ticker(symbol)
         df = ticker.history(period='3mo', interval='1h')
         
@@ -656,7 +590,6 @@ def analyze_smart(symbol, tier, total_tickers, market_context=None):
         if df['Volume'].mean() < 50000: 
             return None
         
-        # Check für Gaps/Splits
         hourly_returns = df['Close'].pct_change().abs()
         if hourly_returns.max() > 0.3:
             return None
@@ -670,19 +603,16 @@ def analyze_smart(symbol, tier, total_tickers, market_context=None):
         if pullback_pct < MIN_PULLBACK_PERCENT or pullback_pct > MAX_PULLBACK_PERCENT: 
             return None
         
-        # Struktur mit Cache
         structure = analyze_structure(df, symbol)
         if not structure['structure_intact']: 
             return None
         if current_price < structure['last_swing_low'] * 0.98: 
             return None 
         
-        # Preliminärer Score
         prelim_score = 30
         if structure['trend_slope'] > 0.02:
             prelim_score += 15
         
-        # Volumen
         avg_vol = df['Volume'].tail(20).mean()
         current_vol = df['Volume'].iloc[-1]
         rvol = current_vol / avg_vol if avg_vol > 0 else 1.0
@@ -692,21 +622,18 @@ def analyze_smart(symbol, tier, total_tickers, market_context=None):
         elif rvol > 1.5:
             prelim_score += 10
         
-        # Support
         support_distance = (current_price - structure['last_swing_low']) / current_price
         if support_distance < 0.03:
             prelim_score += 15
         elif support_distance < 0.05:
             prelim_score += 8
         
-        # === STUFE 2: NEWS (Tier-basiert) ===
         news_items, news_sources, news_cached = analyze_news_tiered(symbol, tier, prelim_score)
         
         if news_items:
             top_news = news_items[0]
             prelim_score += top_news['score']
         
-        # === STUFE 3: FUNDAMENTALE (Nur Top 15) ===
         fundamentals, fund_sources, fund_cached = None, [], False
         if tier <= 15 and prelim_score >= 65:
             fundamentals, fund_sources, fund_cached = get_alpha_vantage_smart(symbol)
@@ -720,7 +647,6 @@ def analyze_smart(symbol, tier, total_tickers, market_context=None):
                 elif pe_ratio > 100:
                     prelim_score -= 5
         
-        # === RISK MANAGEMENT ===
         atr = df['High'].rolling(14).max() - df['Low'].rolling(14).min()
         atr = atr.rolling(14).mean().iloc[-1]
         
@@ -745,7 +671,6 @@ def analyze_smart(symbol, tier, total_tickers, market_context=None):
         if prelim_score < 50: 
             return None
         
-        # Reasons
         reasons = [f"📉 -{pullback_pct:.1f}%"]
         if structure['trend_slope'] > 0.02:
             reasons.append("📈 Trend")
@@ -823,7 +748,6 @@ def render_grid(result_data, container):
     
     result_data.sort(key=lambda x: (x['score'], x['pullback_pct']), reverse=True)
     cols = container.columns(4)
-    scan_time = datetime.now().strftime("%H:%M")
     
     for i, item in enumerate(result_data[:16]):
         sym = item['symbol']
@@ -903,10 +827,7 @@ with st.sidebar:
     st.header("📡 Smart API Status")
     
     fh_status = "🟢" if finnhub_limiter.can_call() else "🔴"
-    
-    # Alpha Vantage Status mit Rotation Info
     alpha_status_list = alpha_manager.get_status()
-    current_key_idx = alpha_manager.current_index
     
     st.markdown(f"""
         <div class="api-stat">
@@ -917,7 +838,6 @@ with st.sidebar:
         </div>
     """, unsafe_allow_html=True)
     
-    # Alpha Vantage Keys Status
     st.markdown("<div style='margin: 10px 0;'><b>Alpha Vantage Keys:</b></div>", unsafe_allow_html=True)
     
     for status in alpha_status_list:
@@ -929,18 +849,35 @@ with st.sidebar:
             </div>
         """, unsafe_allow_html=True)
     
-    # Rotation Counter
-    rotations = st.session_state['api_stats']['alpha_rotation_count']
+    api_stats = st.session_state.get('api_stats', {})
+    rotations = api_stats.get('alpha_rotation_count', 0)
     st.markdown(f'<div class="rotation-badge">🔄 Rotationen: {rotations}</div>', unsafe_allow_html=True)
     
+    cache_hits = api_stats.get('cache_hits', 0)
     st.markdown(f"""
         <div class="api-stat" style="margin-top: 10px;">
             <div style="display: flex; justify-content: space-between;">
                 <span>Cache Hits</span>
-                <span>🟢 {st.session_state['api_stats']['cache_hits']}</span>
+                <span>🟢 {cache_hits}</span>
             </div>
         </div>
     """, unsafe_allow_html=True)
+    
+    # AUTO REFRESH TOGGLE
+    st.divider()
+    st.header("🔄 Auto Refresh")
+    
+    auto_refresh = st.toggle("Live-Modus aktivieren", value=st.session_state.get('auto_refresh', False))
+    if auto_refresh != st.session_state.get('auto_refresh', False):
+        st.session_state['auto_refresh'] = auto_refresh
+        if auto_refresh:
+            st.session_state['refresh_count'] = 0
+        st.rerun()
+    
+    if auto_refresh:
+        st.info(f"⏱️ Aktualisiert alle {AUTO_REFRESH_INTERVAL}s")
+        next_refresh = AUTO_REFRESH_INTERVAL - (int(time.time()) % AUTO_REFRESH_INTERVAL)
+        st.progress((AUTO_REFRESH_INTERVAL - next_refresh) / AUTO_REFRESH_INTERVAL)
     
     st.divider()
     st.header("📋 Watchlist Manager")
@@ -994,21 +931,34 @@ with st.sidebar:
     """, unsafe_allow_html=True)
 
 # =============================================================================
-# MAIN
+# HAUPTBEREICH - OHNE WHILE TRUE!
 # =============================================================================
 
-st.title('🐂 Elite Bull Scanner Pro V5.1 - API Rotation')
-st.caption(f"3-Key Alpha Rotation | {len(alpha_manager.keys)} Keys aktiv | Auto-Failover")
+st.title('🐂 Elite Bull Scanner Pro V5.2 - Auto Refresh')
+st.caption(f"3-Key Alpha Rotation | {len(alpha_manager.keys)} Keys aktiv | Streamlit-Native Refresh")
 
 if not is_market_open():
     st.warning("⚠️ Markt geschlossen! Zeige letzte verfügbare Daten.")
 
-main_placeholder = st.empty()
+# AUTO REFRESH LOGIK (statt while True)
+if st.session_state.get('auto_refresh', False):
+    # Berechne Zeit seit letztem Refresh
+    last_refresh = st.session_state.get('last_auto_refresh', 0)
+    current_time = time.time()
+    
+    if current_time - last_refresh >= AUTO_REFRESH_INTERVAL:
+        st.session_state['last_auto_refresh'] = current_time
+        st.session_state['refresh_count'] = st.session_state.get('refresh_count', 0) + 1
+        st.rerun()
 
-if st.button('🚀 Smart Scan Starten', type='primary'):
-    with main_placeholder.container():
-        st.info("🔍 Analysiere mit intelligenter API-Priorisierung & Key Rotation...")
-        
+# SCAN BUTTON oder AUTOMATISCHER SCAN
+scan_triggered = False
+
+if st.button('🚀 Smart Scan Starten', type='primary') or (st.session_state.get('auto_refresh', False) and not st.session_state.get('scan_results')):
+    scan_triggered = True
+
+if scan_triggered:
+    with st.spinner("🔍 Scanne mit intelligenter API-Priorisierung..."):
         market_ctx = get_market_context()
         
         try:
@@ -1030,10 +980,8 @@ if st.button('🚀 Smart Scan Starten', type='primary'):
         
         for i, (sym, src) in enumerate(scan_list):
             tier = i + 1
-            
-            # Status mit aktuellem Alpha Key
             current_av_key = alpha_manager.current_index + 1 if alpha_manager.keys else "N/A"
-            status_text.text(f"Tier {tier}: {sym} | FH: {finnhub_limiter.get_status()} | AV-Key: {current_av_key}/3")
+            status_text.text(f"Tier {tier}/{len(scan_list)}: {sym} | FH: {finnhub_limiter.get_status()} | AV-Key: {current_av_key}/3")
             
             res = analyze_smart(sym, tier, len(scan_list), market_ctx)
             
@@ -1051,82 +999,79 @@ if st.button('🚀 Smart Scan Starten', type='primary'):
         progress_bar.empty()
         status_text.empty()
         
-        if not results:
-            st.error("❌ Keine starken Pullbacks gefunden!")
+        # Speichere Ergebnisse im Session State
+        st.session_state['scan_results'] = results
+        st.session_state['last_scan_time'] = datetime.now()
+        
+        # Telegram Alerts für Top Setups
+        for item in results[:3]:
+            if item['score'] > 75:
+                alert_key = f"{item['symbol']}_{datetime.now().strftime('%H')}"
+                if alert_key not in st.session_state['sent_alerts']:
+                    setup_type = "CATALYST" if (item.get('news') and item['news'][0]['tier'] == 1) else "GOLD"
+                    send_telegram_alert(
+                        item['symbol'], 
+                        item['price'], 
+                        item['pullback_pct'], 
+                        item.get('news', [{}])[0], 
+                        setup_type,
+                        item.get('pe_ratio'),
+                        item.get('api_sources'),
+                        item.get('tier')
+                    )
+                    st.session_state['sent_alerts'].add(alert_key)
+                    st.toast(f"🚨 T{item['tier']} {item['symbol']} Alert!")
+
+# ERGEBNISSE ANZEIGEN
+results = st.session_state.get('scan_results', [])
+
+if results:
+    # Header mit Live-Indikator
+    col_title, col_status = st.columns([3, 1])
+    with col_title:
+        st.subheader(f"📊 Gefundene Setups: {len(results)}")
+    with col_status:
+        if st.session_state.get('auto_refresh', False):
+            st.markdown(f'<div class="refresh-info"><span class="live-indicator"></span>LIVE | Refresh #{st.session_state.get("refresh_count", 0)}</div>', unsafe_allow_html=True)
         else:
-            results.sort(key=lambda x: x['score'], reverse=True)
-            
-            api_summary = {}
-            for r in results:
-                for api in r.get('api_sources', []):
-                    api_summary[api] = api_summary.get(api, 0) + 1
-            
-            cache_count = sum(1 for r in results if r.get('from_cache'))
-            
-            col_stat1, col_stat2, col_stat3, col_stat4 = st.columns(4)
-            col_stat1.metric("Setups", len(results))
-            col_stat2.metric("API Calls", f"FH:{st.session_state['api_stats']['finnhub']} AV:{st.session_state['api_stats']['alpha_vantage']}")
-            col_stat3.metric("Cache Hits", st.session_state['api_stats']['cache_hits'])
-            col_stat4.metric("Rotations", st.session_state['api_stats']['alpha_rotation_count'])
-            
-            # Alpha Key Usage Detail
-            alpha_detail = ", ".join([f"K{i+1}:{s['calls_today']}" for i, s in enumerate(alpha_manager.get_status())])
-            st.success(f"✅ APIs: {api_summary} | Cache: {cache_count} Hits | Alpha: {alpha_detail}")
-            st.divider()
-            
-            refresh_count = 0
-            while True:
-                try:
-                    if refresh_count % 10 == 0:
-                        market_ctx = get_market_context()
-                    
-                    with main_placeholder.container():
-                        col1, col2, col3, col4 = st.columns(4)
-                        
-                        if market_ctx:
-                            col1.metric('SPY Trend', market_ctx['spy_trend'])
-                            col2.metric('Risk', 'OFF' if market_ctx['risk_off'] else 'ON')
-                        
-                        col3.metric('Setups', len(results))
-                        col4.metric('Update', datetime.now().strftime("%H:%M:%S"))
-                        
-                        st.divider()
-                        
-                        for item in results[:3]:
-                            if item['score'] > 75:
-                                alert_key = f"{item['symbol']}_{datetime.now().strftime('%H')}"
-                                if alert_key not in st.session_state['sent_alerts']:
-                                    setup_type = "CATALYST" if (item.get('news') and item['news'][0]['tier'] == 1) else "GOLD"
-                                    send_telegram_alert(
-                                        item['symbol'], 
-                                        item['price'], 
-                                        item['pullback_pct'], 
-                                        item.get('news', [{}])[0], 
-                                        setup_type,
-                                        item.get('pe_ratio'),
-                                        item.get('api_sources'),
-                                        item.get('tier')
-                                    )
-                                    st.session_state['sent_alerts'].add(alert_key)
-                                    st.toast(f"🚨 T{item['tier']} {item['symbol']} Alert!")
-                        
-                        render_grid(results, st)
-                        
-                        with st.expander("📡 API Details & Limits"):
-                            st.write(f"**Finnhub:** {finnhub_limiter.get_status()}/60 per minute")
-                            st.write("**Alpha Vantage Keys:**")
-                            for status in alpha_manager.get_status():
-                                active_mark = "▶️" if status['active'] else " "
-                                st.write(f"  {active_mark} Key {status['index']+1}: {status['calls_today']}/500 {'(EXHAUSTED)' if status['exhausted'] else ''}")
-                            st.write(f"**Cache Hits:** {st.session_state['api_stats']['cache_hits']}")
-                            st.write(f"**Key Rotations:** {st.session_state['api_stats']['alpha_rotation_count']}")
-                            st.write("---")
-                            for r in results[:5]:
-                                st.write(f"**{r['symbol']}** (T{r['tier']}): {', '.join(r.get('api_sources', []))} {'[CACHE]' if r.get('from_cache') else ''}")
-                    
-                    refresh_count += 1
-                    time.sleep(30)
-                    
-                except Exception as e:
-                    st.error(f"Fehler: {e}")
-                    time.sleep(30)
+            last_scan = st.session_state.get('last_scan_time')
+            if last_scan:
+                st.caption(f"Letzter Scan: {last_scan.strftime('%H:%M:%S')}")
+    
+    # Statistiken
+    api_stats = st.session_state.get('api_stats', {})
+    api_summary = {}
+    for r in results:
+        for api in r.get('api_sources', []):
+            api_summary[api] = api_summary.get(api, 0) + 1
+    
+    cache_count = sum(1 for r in results if r.get('from_cache'))
+    
+    col_stat1, col_stat2, col_stat3, col_stat4 = st.columns(4)
+    col_stat1.metric("Setups", len(results))
+    col_stat2.metric("API Calls", f"FH:{api_stats.get('finnhub', 0)} AV:{api_stats.get('alpha_vantage', 0)}")
+    col_stat3.metric("Cache Hits", api_stats.get('cache_hits', 0))
+    col_stat4.metric("Rotations", api_stats.get('alpha_rotation_count', 0))
+    
+    alpha_detail = ", ".join([f"K{i+1}:{s['calls_today']}" for i, s in enumerate(alpha_manager.get_status())])
+    st.success(f"✅ APIs: {api_summary} | Cache: {cache_count} Hits | Alpha: {alpha_detail}")
+    st.divider()
+    
+    # Grid anzeigen
+    render_grid(results, st)
+    
+    # API Details
+    with st.expander("📡 API Details & Limits"):
+        st.write(f"**Finnhub:** {finnhub_limiter.get_status()}/60 per minute")
+        st.write("**Alpha Vantage Keys:**")
+        for status in alpha_manager.get_status():
+            active_mark = "▶️" if status['active'] else " "
+            st.write(f"  {active_mark} Key {status['index']+1}: {status['calls_today']}/500 {'(EXHAUSTED)' if status['exhausted'] else ''}")
+        st.write(f"**Cache Hits:** {api_stats.get('cache_hits', 0)}")
+        st.write(f"**Key Rotations:** {api_stats.get('alpha_rotation_count', 0)}")
+        st.write("---")
+        for r in results[:5]:
+            st.write(f"**{r['symbol']}** (T{r['tier']}): {', '.join(r.get('api_sources', []))} {'[CACHE]' if r.get('from_cache') else ''}")
+
+elif not scan_triggered:
+    st.info("👆 Klicke 'Smart Scan Starten' oder aktiviere 'Live-Modus' in der Sidebar für automatische Updates alle 30 Sekunden.")
