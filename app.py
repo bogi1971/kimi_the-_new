@@ -9,7 +9,75 @@ from io import StringIO
 import warnings
 import pytz
 warnings.filterwarnings('ignore')
+# =============================================================================
+# US MARKET CLOCK - NEU HINZUGEFÜGT
+# =============================================================================
 
+def get_market_clock():
+    """Zeigt aktuelle US Marktzeit und Status"""
+    et = pytz.timezone('US/Eastern')
+    now = datetime.now(et)
+    
+    # Marktzeiten definieren
+    market_open = now.replace(hour=9, minute=30, second=0, microsecond=0)
+    market_close = now.replace(hour=16, minute=0, second=0, microsecond=0)
+    pre_market = now.replace(hour=4, minute=0, second=0, microsecond=0)
+    after_hours = now.replace(hour=20, minute=0, second=0, microsecond=0)
+    
+    # Status bestimmen
+    if now.weekday() >= 5:  # Wochenende
+        status = "CLOSED"
+        color = "#ff4b4b"
+        bg_color = "#3a1e1e"
+        countdown = "Weekend"
+        next_event = "Monday 09:30 ET"
+        progress = 0
+    elif now < pre_market:
+        status = "CLOSED"
+        color = "#ff4b4b"
+        bg_color = "#3a1e1e"
+        countdown = f"Pre-market in {str(pre_market - now)[:8]}"
+        next_event = "04:00 ET"
+        progress = 0
+    elif now < market_open:
+        status = "PRE-MARKET"
+        color = "#FFD700"
+        bg_color = "#2b2b00"
+        countdown = f"Opens in {str(market_open - now)[:8]}"
+        next_event = "09:30 ET"
+        progress = 0
+    elif market_open <= now <= market_close:
+        status = "OPEN"
+        color = "#00FF00"
+        bg_color = "#0d1f12"
+        countdown = f"Closes in {str(market_close - now)[:8]}"
+        next_event = "16:00 ET"
+        progress = (now - market_open) / (market_close - market_open)
+    elif now < after_hours:
+        status = "AFTER HOURS"
+        color = "#58a6ff"
+        bg_color = "#1a1a2e"
+        countdown = f"Ext. hours {str(after_hours - now)[:8]}"
+        next_event = "20:00 ET"
+        progress = 0
+    else:
+        status = "CLOSED"
+        color = "#ff4b4b"
+        bg_color = "#3a1e1e"
+        countdown = f"Opens tomorrow"
+        next_event = "09:30 ET"
+        progress = 0
+    
+    return {
+        'time': now.strftime('%I:%M:%S %p'),
+        'status': status,
+        'color': color,
+        'bg_color': bg_color,
+        'countdown': countdown,
+        'next_event': next_event,
+        'progress': progress,
+        'is_open': status == "OPEN"
+    }
 # =============================================================================
 # KONFIGURATION
 # =============================================================================
