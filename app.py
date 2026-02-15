@@ -17,19 +17,29 @@ warnings.filterwarnings('ignore')
 # KONFIGURATION
 # =============================================================================
 
-st.set_page_config(layout="wide", page_title="Elite Bull Scanner Pro V5.0 - Smart API", page_icon="🐂")
+st.set_page_config(layout="wide", page_title="Elite Bull Scanner Pro V5.1 - API Rotation", page_icon="🐂")
 
 # API KEYS (Secrets oder direkt)
 try:
     TELEGRAM_BOT_TOKEN = st.secrets["telegram"]["bot_token"]
     TELEGRAM_CHAT_ID = st.secrets["telegram"]["chat_id"]
     FINNHUB_API_KEY = st.secrets["api_keys"]["finnhub"]
-    ALPHA_VANTAGE_KEY = st.secrets["api_keys"]["alpha_vantage"]
+    # 3 Alpha Vantage Keys für Rotation
+    ALPHA_VANTAGE_KEYS = [
+        st.secrets["api_keys"]["alpha_vantage_1"],
+        st.secrets["api_keys"]["alpha_vantage_2"],
+        st.secrets["api_keys"]["alpha_vantage_3"]
+    ]
 except:
     TELEGRAM_BOT_TOKEN = "8317204351:AAHRu-mYYU0_NRIxNGEQ5voneIQaDKeQuF8"
     TELEGRAM_CHAT_ID = "5338135874"
     FINNHUB_API_KEY = "d652vnpr01qqbln5m9cgd652vnpr01qqbln5m9d0"
-    ALPHA_VANTAGE_KEY = "N6PM9UCXL55JZTN9"
+    # 3 Alpha Vantage Keys (ersetze mit deinen echten Keys)
+    ALPHA_VANTAGE_KEYS = [
+        "N6PM9UCXL55JZTN9",  # Key 1
+        "4ebfbdb3c8374c99abbf259c168d93c1",    # Key 2
+        "6898e81a60be40a092710d0349f95110",     # Key 3
+    ]
 
 # KONFIGURATION
 MIN_PULLBACK_PERCENT = 0.10
@@ -38,7 +48,7 @@ MAX_PULLBACK_PERCENT = 0.25
 # API LIMITS (kostenlose Pläne)
 API_LIMITS = {
     'finnhub': {'calls_per_min': 60, 'calls_per_hour': 1000},
-    'alpha_vantage': {'calls_per_min': 5, 'calls_per_day': 500},
+    'alpha_vantage': {'calls_per_min': 5, 'calls_per_day': 500},  # Pro Key!
     'yahoo': {'calls_per_hour': 2000}
 }
 
@@ -68,7 +78,14 @@ if 'watchlist' not in st.session_state:
 if 'sent_alerts' not in st.session_state:
     st.session_state['sent_alerts'] = set()
 if 'api_stats' not in st.session_state:
-    st.session_state['api_stats'] = {'finnhub': 0, 'alpha_vantage': 0, 'yahoo': 0, 'cache_hits': 0}
+    st.session_state['api_stats'] = {
+        'finnhub': 0, 
+        'alpha_vantage': 0, 
+        'alpha_key_index': 0,  # Aktueller Key Index
+        'yahoo': 0, 
+        'cache_hits': 0,
+        'alpha_rotation_count': 0
+    }
 
 # =============================================================================
 # CSS STYLING
@@ -102,6 +119,8 @@ st.markdown("""
                    border-radius: 6px; font-size: 0.65rem; display: inline-block; margin: 2px; }
     .api-badge { background: linear-gradient(45deg, #4ecdc4, #44a3aa); color: white; padding: 2px 8px; 
                  border-radius: 8px; font-size: 0.75rem; display: inline-block; margin: 3px 0; }
+    .rotation-badge { background: linear-gradient(45deg, #ff6b6b, #feca57); color: white; padding: 2px 8px; 
+                      border-radius: 8px; font-size: 0.7rem; display: inline-block; margin: 2px; }
     
     .stop-loss { color: #ff9999; font-weight: bold; font-size: 0.9rem; border: 1px solid #ff4b4b; 
                  border-radius: 4px; padding: 2px 8px; display: inline-block; }
@@ -115,6 +134,10 @@ st.markdown("""
     .news-link-btn { display: block; background-color: rgba(255, 255, 255, 0.1); color: #fff !important; 
                      padding: 8px; border-radius: 5px; font-size: 0.8rem; margin: 8px 0; border: 1px solid #777; 
                      text-decoration: none; text-align: left; }
+    .key-indicator { font-size: 0.7rem; padding: 2px 6px; border-radius: 4px; background: #2d2d2d; 
+                     border: 1px solid #444; display: inline-block; margin: 2px; }
+    .key-active { background: #1e3a1e; border-color: #00FF00; color: #00FF00; }
+    .key-exhausted { background: #3a1e1e; border-color: #ff4b4b; color: #ff4b4b; }
     </style>
 """, unsafe_allow_html=True)
 
@@ -156,8 +179,95 @@ fundamentals_cache = SmartCache()
 structure_cache = SmartCache()
 
 # =============================================================================
-# RATE LIMITER
+# RATE LIMITER MIT KEY ROTATION
 # =============================================================================
+
+class AlphaVantageManager:
+    """Verwaltet 3 Alpha Vantage Keys mit Rotation"""
+    
+    def __init__(self, keys):
+        self.keys = [k for k in keys if k and "DEIN_" not in k]
+        self.current_index = 0
+        self.limiters = {}
+        
+        for i, key in enumerate(self.keys):
+            self.limiters[i] = {
+                'calls_today': 0,
+                'calls_per_min': [],
+                'key': key,
+                'exhausted': False
+            }
+    
+    def get_current_key(self):
+        """Gibt aktuellen Key zurück"""
+        if not self.keys:
+            return None
+        return self.keys[self.current_index]
+    
+    def rotate_key(self):
+        """Wechselt zum nächsten verfügbaren Key"""
+        if not self.keys:
+            return None
+        
+        original_index = self.current_index
+        
+        for _ in range(len(self.keys)):
+            self.current_index = (self.current_index + 1) % len(self.keys)
+            if not self.limiters[self.current_index]['exhausted']:
+                st.session_state['api_stats']['alpha_rotation_count'] += 1
+                return self.get_current_key()
+        
+        # Alle Keys exhausted
+        return None
+    
+    def can_call(self, key_index=None):
+        """Prüft ob aktueller Key (oder spezifischer Key) verfügbar"""
+        if not self.keys:
+            return False
+        
+        idx = key_index if key_index is not None else self.current_index
+        limiter = self.limiters[idx]
+        
+        now = time.time()
+        
+        # Minuten-Limit prüfen (5 calls/min)
+        limiter['calls_per_min'] = [c for c in limiter['calls_per_min'] if now - c < 60]
+        if len(limiter['calls_per_min']) >= 5:
+            return False
+        
+        # Tages-Limit prüfen (500 calls/day)
+        if limiter['calls_today'] >= 500:
+            limiter['exhausted'] = True
+            return False
+        
+        return True
+    
+    def record_call(self, key_index=None):
+        """Speichert einen API Call"""
+        idx = key_index if key_index is not None else self.current_index
+        limiter = self.limiters[idx]
+        
+        limiter['calls_per_min'].append(time.time())
+        limiter['calls_today'] += 1
+        st.session_state['api_stats']['alpha_vantage'] += 1
+        
+        return limiter['calls_today']
+    
+    def get_status(self):
+        """Gibt Status aller Keys zurück"""
+        status = []
+        for i, key in enumerate(self.keys):
+            limiter = self.limiters[i]
+            masked_key = f"{key[:4]}...{key[-4:]}" if len(key) > 8 else "N/A"
+            status.append({
+                'index': i,
+                'key': masked_key,
+                'active': i == self.current_index,
+                'calls_today': limiter['calls_today'],
+                'exhausted': limiter['exhausted'],
+                'can_call': self.can_call(i)
+            })
+        return status
 
 class RateLimiter:
     """Trackt API-Aufrufe und enforced Limits"""
@@ -183,7 +293,7 @@ class RateLimiter:
 
 # Rate Limiter initialisieren
 finnhub_limiter = RateLimiter(60, 60)
-alpha_limiter = RateLimiter(5, 60)
+alpha_manager = AlphaVantageManager(ALPHA_VANTAGE_KEYS)
 yahoo_limiter = RateLimiter(100, 60)
 
 # =============================================================================
@@ -372,7 +482,7 @@ def get_finnhub_news_smart(symbol):
     return [], False
 
 def get_alpha_vantage_smart(symbol):
-    """Alpha Vantage mit Caching und Rate Limiting"""
+    """Alpha Vantage mit 3-Key Rotation, Caching und Rate Limiting"""
     cache_key = f"av_fund_{symbol}"
     
     cached = fundamentals_cache.get(cache_key, CACHE_TTL['fundamentals'])
@@ -380,41 +490,61 @@ def get_alpha_vantage_smart(symbol):
         st.session_state['api_stats']['cache_hits'] += 1
         return cached, True
     
-    if not alpha_limiter.can_call():
+    # Prüfe ob überhaupt Keys verfügbar
+    if not alpha_manager.keys:
         return None, False
     
-    if "DEIN_" in ALPHA_VANTAGE_KEY or not ALPHA_VANTAGE_KEY:
-        return None, False
+    # Versuche mit aktuellem Key, rotiere bei Bedarf
+    attempts = 0
+    max_attempts = len(alpha_manager.keys)
     
-    try:
-        url = "https://www.alphavantage.co/query"
-        params = {
-            'function': 'OVERVIEW',
-            'symbol': symbol,
-            'apikey': ALPHA_VANTAGE_KEY
-        }
-        
-        response = requests.get(url, params=params, timeout=10)
-        alpha_limiter.record_call()
-        st.session_state['api_stats']['alpha_vantage'] += 1
-        
-        if response.status_code == 200:
-            data = response.json()
-            if 'Symbol' in data:
-                result = {
-                    'pe_ratio': float(data.get('PERatio', 0)) if data.get('PERatio') else None,
-                    'eps': float(data.get('EPS', 0)) if data.get('EPS') else None,
-                    'dividend_yield': float(data.get('DividendYield', 0)) if data.get('DividendYield') else None,
-                    'sector': data.get('Sector', 'Unknown'),
-                    'industry': data.get('Industry', 'Unknown'),
-                    'market_cap': int(data.get('MarketCapitalization', 0)) if data.get('MarketCapitalization') else 0
+    while attempts < max_attempts:
+        if alpha_manager.can_call():
+            current_key = alpha_manager.get_current_key()
+            
+            try:
+                url = "https://www.alphavantage.co/query"
+                params = {
+                    'function': 'OVERVIEW',
+                    'symbol': symbol,
+                    'apikey': current_key
                 }
-                fundamentals_cache.set(cache_key, result)
-                return result, False
                 
-    except Exception as e:
-        pass
+                response = requests.get(url, params=params, timeout=10)
+                alpha_manager.record_call()
+                
+                if response.status_code == 200:
+                    data = response.json()
+                    
+                    # Prüfe auf API Limit Message
+                    if 'Note' in data or 'Information' in data:
+                        # Key ist limitiert, rotiere
+                        alpha_manager.limiters[alpha_manager.current_index]['exhausted'] = True
+                        alpha_manager.rotate_key()
+                        attempts += 1
+                        time.sleep(0.5)  # Kurze Pause vor Retry
+                        continue
+                    
+                    if 'Symbol' in data:
+                        result = {
+                            'pe_ratio': float(data.get('PERatio', 0)) if data.get('PERatio') else None,
+                            'eps': float(data.get('EPS', 0)) if data.get('EPS') else None,
+                            'dividend_yield': float(data.get('DividendYield', 0)) if data.get('DividendYield') else None,
+                            'sector': data.get('Sector', 'Unknown'),
+                            'industry': data.get('Industry', 'Unknown'),
+                            'market_cap': int(data.get('MarketCapitalization', 0)) if data.get('MarketCapitalization') else 0
+                        }
+                        fundamentals_cache.set(cache_key, result)
+                        return result, False
+                        
+            except Exception as e:
+                pass
+        
+        # Kann nicht callen, rotiere
+        alpha_manager.rotate_key()
+        attempts += 1
     
+    # Alle Keys exhausted
     return None, False
 
 def get_yahoo_news_fallback(symbol):
@@ -773,7 +903,10 @@ with st.sidebar:
     st.header("📡 Smart API Status")
     
     fh_status = "🟢" if finnhub_limiter.can_call() else "🔴"
-    av_status = "🟢" if alpha_limiter.can_call() else "🔴"
+    
+    # Alpha Vantage Status mit Rotation Info
+    alpha_status_list = alpha_manager.get_status()
+    current_key_idx = alpha_manager.current_index
     
     st.markdown(f"""
         <div class="api-stat">
@@ -782,13 +915,26 @@ with st.sidebar:
                 <span>{fh_status} {finnhub_limiter.get_status()}/min</span>
             </div>
         </div>
-        <div class="api-stat">
-            <div style="display: flex; justify-content: space-between;">
-                <span>Alpha Vantage</span>
-                <span>{av_status} {alpha_limiter.get_status()}/min</span>
+    """, unsafe_allow_html=True)
+    
+    # Alpha Vantage Keys Status
+    st.markdown("<div style='margin: 10px 0;'><b>Alpha Vantage Keys:</b></div>", unsafe_allow_html=True)
+    
+    for status in alpha_status_list:
+        key_class = "key-active" if status['active'] else "key-exhausted" if status['exhausted'] else ""
+        indicator = "▶️" if status['active'] else "✅" if not status['exhausted'] else "❌"
+        st.markdown(f"""
+            <div class="key-indicator {key_class}">
+                {indicator} Key {status['index']+1}: {status['calls_today']}/500
             </div>
-        </div>
-        <div class="api-stat">
+        """, unsafe_allow_html=True)
+    
+    # Rotation Counter
+    rotations = st.session_state['api_stats']['alpha_rotation_count']
+    st.markdown(f'<div class="rotation-badge">🔄 Rotationen: {rotations}</div>', unsafe_allow_html=True)
+    
+    st.markdown(f"""
+        <div class="api-stat" style="margin-top: 10px;">
             <div style="display: flex; justify-content: space-between;">
                 <span>Cache Hits</span>
                 <span>🟢 {st.session_state['api_stats']['cache_hits']}</span>
@@ -841,7 +987,9 @@ with st.sidebar:
         <b>Tier System:</b><br>
         🥇 T1-10: Finnhub + Alpha<br>
         🥈 T11-30: Yahoo News<br>
-        🥉 T31+: Basis only
+        🥉 T31+: Basis only<br><br>
+        <b>Alpha Rotation:</b><br>
+        3 Keys × 500 Calls = 1.500/Tag
         </small>
     """, unsafe_allow_html=True)
 
@@ -849,8 +997,8 @@ with st.sidebar:
 # MAIN
 # =============================================================================
 
-st.title('🐂 Elite Bull Scanner Pro V5.0 - Smart API')
-st.caption(f"Tier-basierte API-Nutzung | Cache-Optimierung | Limits geschützt")
+st.title('🐂 Elite Bull Scanner Pro V5.1 - API Rotation')
+st.caption(f"3-Key Alpha Rotation | {len(alpha_manager.keys)} Keys aktiv | Auto-Failover")
 
 if not is_market_open():
     st.warning("⚠️ Markt geschlossen! Zeige letzte verfügbare Daten.")
@@ -859,7 +1007,7 @@ main_placeholder = st.empty()
 
 if st.button('🚀 Smart Scan Starten', type='primary'):
     with main_placeholder.container():
-        st.info("🔍 Analysiere mit intelligenter API-Priorisierung...")
+        st.info("🔍 Analysiere mit intelligenter API-Priorisierung & Key Rotation...")
         
         market_ctx = get_market_context()
         
@@ -883,7 +1031,9 @@ if st.button('🚀 Smart Scan Starten', type='primary'):
         for i, (sym, src) in enumerate(scan_list):
             tier = i + 1
             
-            status_text.text(f"Tier {tier}: {sym} | FH: {finnhub_limiter.get_status()} | AV: {alpha_limiter.get_status()}")
+            # Status mit aktuellem Alpha Key
+            current_av_key = alpha_manager.current_index + 1 if alpha_manager.keys else "N/A"
+            status_text.text(f"Tier {tier}: {sym} | FH: {finnhub_limiter.get_status()} | AV-Key: {current_av_key}/3")
             
             res = analyze_smart(sym, tier, len(scan_list), market_ctx)
             
@@ -917,9 +1067,11 @@ if st.button('🚀 Smart Scan Starten', type='primary'):
             col_stat1.metric("Setups", len(results))
             col_stat2.metric("API Calls", f"FH:{st.session_state['api_stats']['finnhub']} AV:{st.session_state['api_stats']['alpha_vantage']}")
             col_stat3.metric("Cache Hits", st.session_state['api_stats']['cache_hits'])
-            col_stat4.metric("Mit APIs", f"{len([r for r in results if r.get('api_sources')])}/{len(results)}")
+            col_stat4.metric("Rotations", st.session_state['api_stats']['alpha_rotation_count'])
             
-            st.success(f"✅ APIs: {api_summary} | Cache: {cache_count} Hits")
+            # Alpha Key Usage Detail
+            alpha_detail = ", ".join([f"K{i+1}:{s['calls_today']}" for i, s in enumerate(alpha_manager.get_status())])
+            st.success(f"✅ APIs: {api_summary} | Cache: {cache_count} Hits | Alpha: {alpha_detail}")
             st.divider()
             
             refresh_count = 0
@@ -962,8 +1114,12 @@ if st.button('🚀 Smart Scan Starten', type='primary'):
                         
                         with st.expander("📡 API Details & Limits"):
                             st.write(f"**Finnhub:** {finnhub_limiter.get_status()}/60 per minute")
-                            st.write(f"**Alpha Vantage:** {alpha_limiter.get_status()}/5 per minute")
+                            st.write("**Alpha Vantage Keys:**")
+                            for status in alpha_manager.get_status():
+                                active_mark = "▶️" if status['active'] else " "
+                                st.write(f"  {active_mark} Key {status['index']+1}: {status['calls_today']}/500 {'(EXHAUSTED)' if status['exhausted'] else ''}")
                             st.write(f"**Cache Hits:** {st.session_state['api_stats']['cache_hits']}")
+                            st.write(f"**Key Rotations:** {st.session_state['api_stats']['alpha_rotation_count']}")
                             st.write("---")
                             for r in results[:5]:
                                 st.write(f"**{r['symbol']}** (T{r['tier']}): {', '.join(r.get('api_sources', []))} {'[CACHE]' if r.get('from_cache') else ''}")
