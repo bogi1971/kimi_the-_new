@@ -764,8 +764,16 @@ st.markdown(f"""
 
 # MARKET CLOCK - OBEN ANZEIGEN
 clock = get_market_clock()
-
-st.markdown(f\"\"\"\n    <div class=\"market-clock-container\">\n        <div class=\"market-time\">{clock['time']}</div>\n        <div style=\"margin: 10px 0;\">\n            <span class=\"market-status\" style=\"background-color: {clock['bg_color']}; color: {clock['color']}; border: 2px solid {clock['color']};\">\n                {clock['status']}\n            </span>\n        </div>\n        <div class=\"market-countdown\">{clock['countdown']}</div>\n        {f'<div class=\"market-progress\"><div class=\"market-progress-bar\" style=\"width: {clock[\"progress\"]*100}%\"></div></div>' if clock['is_open'] else ''}\n        {f'<div style=\"font-size: 0.8rem; color: #8b949e; margin-top: 5px;\">{int(clock[\"progress\"]*100)}% of session</div>' if clock['is_open'] else ''}\n    </div>\n\"\"\", unsafe_allow_html=True)
+st.markdown(f"""
+<div class="market-clock-container">
+    <div class="market-time">{clock['time']}</div>
+    <div style="margin: 10px 0;">
+        <span class="market-status" style="background: {status_color};">
+            {market_status}
+        </span>
+    </div>
+</div>
+""", unsafe_allow_html=True)
 
 # Titel und Caption
 st.title('🐂 Elite Bull Scanner Pro V5.5')
