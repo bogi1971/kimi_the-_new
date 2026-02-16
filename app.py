@@ -33,61 +33,37 @@ def get_market_clock():
     pre_market = now.replace(hour=4, minute=0, second=0, microsecond=0)
     after_hours = now.replace(hour=20, minute=0, second=0, microsecond=0)
 
-    # Feiertage 2025 (vereinfacht)
-    holidays_2025 = [
-        (1, 1),   # New Year's
-        (1, 20),  # MLK Day
-        (2, 17),  # Presidents' Day (morgen!)
-        (4, 18),  # Good Friday
-        (5, 26),  # Memorial Day
-        (6, 19),  # Juneteenth
-        (7, 4),   # Independence Day
-        (9, 1),   # Labor Day
-        (11, 27), # Thanksgiving
-        (12, 25), # Christmas
-    ]
-    
+    # Feiertage 2025
+    holidays_2025 = [(1, 1), (1, 20), (2, 17), (4, 18), (5, 26), (6, 19), (7, 4), (9, 1), (11, 27), (12, 25)]
     is_holiday = (now.month, now.day) in holidays_2025
 
     if now.weekday() >= 5 or is_holiday:
         status = "CLOSED" if now.weekday() >= 5 else "HOLIDAY"
         color = "#ff4b4b"
-        bg_color = "#3a1e1e"
         countdown = "Weekend" if now.weekday() >= 5 else "Holiday"
         next_event = "Tuesday 09:30 ET" if is_holiday and now.weekday() == 0 else "Monday 09:30 ET"
         progress = 0
     elif now < pre_market:
         status = "CLOSED"
         color = "#ff4b4b"
-        bg_color = "#3a1e1e"
         countdown = f"Pre-market in {str(pre_market - now)[:8]}"
         next_event = "04:00 ET"
         progress = 0
     elif now < market_open:
         status = "PRE-MARKET"
         color = "#FFD700"
-        bg_color = "#2b2b00"
         countdown = f"Opens in {str(market_open - now)[:8]}"
         next_event = "09:30 ET"
         progress = 0
     elif market_open <= now <= market_close:
         status = "OPEN"
         color = "#00FF00"
-        bg_color = "#0d1f12"
         countdown = f"Closes in {str(market_close - now)[:8]}"
         next_event = "16:00 ET"
         progress = (now - market_open) / (market_close - market_open)
-    elif now < after_hours:
-        status = "AFTER HOURS"
-        color = "#58a6ff"
-        bg_color = "#1a1a2e"
-        countdown = f"Ext. hours {str(after_hours - now)[:8]}"
-        next_event = "20:00 ET"
-        progress = 0
     else:
         status = "CLOSED"
         color = "#ff4b4b"
-        bg_color = "#3a1e1e"
         countdown = "Opens tomorrow"
         next_event = "09:30 ET"
         progress = 0
@@ -96,7 +72,6 @@ def get_market_clock():
         'time': now.strftime('%I:%M:%S %p'),
         'status': status,
         'color': color,
-        'bg_color': bg_color,
         'countdown': countdown,
         'next_event': next_event,
         'progress': progress,
@@ -206,7 +181,6 @@ st.markdown("""
 .key-active { background: #1e3a1e; border-color: #00FF00; color: #00FF00; }
 .key-exhausted { background: #3a1e1e; border-color: #ff4b4b; color: #ff4b4b; }
 .alert-history-item { background: #1a1a2e; border-left: 4px solid #00FF00; padding: 10px; margin: 5px 0; border-radius: 5px; font-size: 0.85rem; }
-/* NEU: Holiday Warning */
 .holiday-banner {
     background: linear-gradient(90deg, #ff6b6b, #ffa502);
     color: white;
@@ -315,56 +289,168 @@ finnhub_limiter = RateLimiter(60, 60)
 alpha_manager = AlphaVantageManager(ALPHA_VANTAGE_KEYS)
 
 # ============================== Analyse Funktionen ==============================
+# KORRIGIERT: Robuste analyze_structure mit vollständiger Fehlerprüfung
 def analyze_structure(df, symbol=None):
+    """Swing Highs / Lows Analyse - mit robuster Fehlerbehandlung für Feiertage"""
+    
+    # KORRIGIERT: Prüfe ob df gültig ist
+    if df is None:
+        logger.debug(f"{symbol}: DataFrame ist None in analyze_structure")
+        return _default_structure_result()
+        
+    if not isinstance(df, pd.DataFrame):
+        logger.debug(f"{symbol}: Ungültiger Datentyp in analyze_structure: {type(df)}")
+        return _default_structure_result()
+        
+    if df.empty:
+        logger.debug(f"{symbol}: Leerer DataFrame in analyze_structure")
+        return _default_structure_result()
+    
+    # KORRIGIERT: Prüfe ob benötigte Spalten existieren
+    required_cols = ['High', 'Low', 'Close']
+    for col in required_cols:
+        if col not in df.columns:
+            logger.debug(f"{symbol}: Spalte {col} fehlt in DataFrame")
+            return _default_structure_result()
+    
+    # KORRIGIERT: Prüfe ob genügend Daten vorhanden sind
+    if len(df) < 10:
+        logger.debug(f"{symbol}: Zu wenig Daten in analyze_structure: {len(df)} Zeilen")
+        return _default_structure_result()
+    
+    # KORRIGIERT: Entferne NaN Werte
+    df_clean = df[['High', 'Low', 'Close']].dropna()
+    if len(df_clean) < 10:
+        logger.debug(f"{symbol}: Zu wenig gültige Daten nach NaN-Entfernung")
+        return _default_structure_result()
+    
+    # Cache-Lookup
     if symbol:
         cache_key = f"structure_{symbol}"
         cached = structure_cache.get(cache_key, 300)
         if cached:
             return cached
+    
     try:
-        highs = df['High'].values
-        lows = df['Low'].values
+        # KORRIGIERT: Sichere Extraktion der Werte
+        highs = df_clean['High'].values
+        lows = df_clean['Low'].values
+        
+        # KORRIGIERT: Prüfe ob Arrays gültig sind
+        if highs is None or lows is None or len(highs) == 0 or len(lows) == 0:
+            logger.debug(f"{symbol}: Leere Arrays nach .values")
+            return _default_structure_result(df_clean)
+        
+        # KORRIGIERT: Sichere Berechnung der Swing-Punkte
         swing_highs = []
         swing_lows = []
+        
+        # Wir brauchen mindestens 5 Punkte für die Berechnung (2 links, 1 Mitte, 2 rechts)
         for i in range(2, len(highs)-2):
-            if highs[i] > highs[i-1] and highs[i] > highs[i-2] and highs[i] > highs[i+1] and highs[i] > highs[i+2]:
-                swing_highs.append((i, highs[i]))
-            if lows[i] < lows[i-1] and lows[i] < lows[i-2] and lows[i] < lows[i+1] and lows[i] < lows[i+2]:
-                swing_lows.append((i, lows[i]))
-        if len(swing_highs)>=2 and len(swing_lows)>=2:
-            hh = swing_highs[-1][1] > swing_highs[-2][1]
-            hl = swing_lows[-1][1] > swing_lows[-2][1]
-            slope = 0
-            if len(swing_highs)>=3:
-                x = [swing_highs[-3][0], swing_highs[-2][0], swing_highs[-1][0]]
-                y = [swing_highs[-3][1], swing_highs[-2][1], swing_highs[-1][1]]
-                n = len(x)
-                x_mean, y_mean = sum(x)/n, sum(y)/n
-                num = sum((x[i]-x_mean)*(y[i]-y_mean) for i in range(n))
-                den = sum((x[i]-x_mean)**2 for i in range(n))
-                slope = num/den if den != 0 else 0
-            result = {
-                'higher_highs': hh, 'higher_lows': hl, 'trend_slope': slope,
-                'structure_intact': hh and hl,
-                'last_swing_low': swing_lows[-1][1],
-                'last_swing_high': swing_highs[-1][1]
-            }
+            try:
+                # KORRIGIERT: Prüfe auf NaN/Inf vor dem Vergleich
+                if not (np.isfinite(highs[i]) and np.isfinite(highs[i-1]) and np.isfinite(highs[i-2]) 
+                       and np.isfinite(highs[i+1]) and np.isfinite(highs[i+2])):
+                    continue
+                    
+                if (highs[i] > highs[i-1] and highs[i] > highs[i-2] and 
+                    highs[i] > highs[i+1] and highs[i] > highs[i+2]):
+                    swing_highs.append((i, float(highs[i])))
+                    
+                if not (np.isfinite(lows[i]) and np.isfinite(lows[i-1]) and np.isfinite(lows[i-2])
+                       and np.isfinite(lows[i+1]) and np.isfinite(lows[i+2])):
+                    continue
+                    
+                if (lows[i] < lows[i-1] and lows[i] < lows[i-2] and 
+                    lows[i] < lows[i+1] and lows[i] < lows[i+2]):
+                    swing_lows.append((i, float(lows[i])))
+            except Exception as e:
+                # Ignoriere einzelne Fehler bei der Berechnung
+                continue
+        
+        # KORRIGIERT: Berechne Ergebnis mit Fallbacks
+        if len(swing_highs) >= 2 and len(swing_lows) >= 2:
+            try:
+                hh = swing_highs[-1][1] > swing_highs[-2][1]
+                hl = swing_lows[-1][1] > swing_lows[-2][1]
+                
+                # Trend-Steigung berechnen
+                slope = 0.0
+                if len(swing_highs) >= 3:
+                    x = [float(swing_highs[-3][0]), float(swing_highs[-2][0]), float(swing_highs[-1][0])]
+                    y = [float(swing_highs[-3][1]), float(swing_highs[-2][1]), float(swing_highs[-1][1])]
+                    
+                    # KORRIGIERT: Sichere Steigungsberechnung
+                    if all(np.isfinite(val) for val in x + y):
+                        n = len(x)
+                        x_mean = sum(x) / n
+                        y_mean = sum(y) / n
+                        numerator = sum((x[i] - x_mean) * (y[i] - y_mean) for i in range(n))
+                        denominator = sum((x[i] - x_mean) ** 2 for i in range(n))
+                        if denominator != 0 and np.isfinite(denominator):
+                            slope = numerator / denominator
+                
+                result = {
+                    'higher_highs': bool(hh),
+                    'higher_lows': bool(hl),
+                    'trend_slope': float(slope) if np.isfinite(slope) else 0.0,
+                    'structure_intact': bool(hh and hl),
+                    'last_swing_low': float(swing_lows[-1][1]),
+                    'last_swing_high': float(swing_highs[-1][1])
+                }
+            except Exception as e:
+                logger.debug(f"{symbol}: Fehler bei Swing-Berechnung: {e}")
+                result = _default_structure_result(df_clean)
         else:
-            result = {
-                'structure_intact': False,
-                'last_swing_low': df['Low'].tail(5).min(),
-                'last_swing_high': df['High'].tail(20).max()
-            }
+            result = _default_structure_result(df_clean)
+        
+        # Cache das Ergebnis
         if symbol:
             structure_cache.set(cache_key, result)
+            
         return result
+        
     except Exception as e:
-        logger.error(f"Fehler in analyze_structure: {e}")
-        return {
-            'structure_intact': False,
-            'last_swing_low': df['Low'].tail(5).min(),
-            'last_swing_high': df['High'].tail(20).max()
-        }
+        logger.error(f"Unerwarteter Fehler in analyze_structure für {symbol}: {e}")
+        return _default_structure_result(df_clean if 'df_clean' in locals() else None)
+
+
+def _default_structure_result(df=None):
+    """Hilfsfunktion für Standard-Ergebnis bei Fehlern"""
+    if df is not None and not df.empty and 'Low' in df.columns and 'High' in df.columns:
+        try:
+            # KORRIGIERT: Sichere Berechnung der Fallback-Werte
+            low_vals = df['Low'].dropna()
+            high_vals = df['High'].dropna()
+            
+            last_low = float(low_vals.tail(5).min()) if len(low_vals) > 0 else 0.0
+            last_high = float(high_vals.tail(20).max()) if len(high_vals) > 0 else 0.0
+            
+            if not np.isfinite(last_low):
+                last_low = 0.0
+            if not np.isfinite(last_high):
+                last_high = 0.0
+                
+            return {
+                'structure_intact': False,
+                'higher_highs': False,
+                'higher_lows': False,
+                'trend_slope': 0.0,
+                'last_swing_low': last_low,
+                'last_swing_high': last_high
+            }
+        except:
+            pass
+    
+    return {
+        'structure_intact': False,
+        'higher_highs': False,
+        'higher_lows': False,
+        'trend_slope': 0.0,
+        'last_swing_low': 0.0,
+        'last_swing_high': 0.0
+    }
+
 
 def get_yahoo_news_fallback(symbol):
     try:
@@ -547,12 +633,20 @@ def analyze_smart(symbol, tier, total_tickers, market_ctx=None):
         if pullback_pct < MIN_PULLBACK_PERCENT or pullback_pct > MAX_PULLBACK_PERCENT:
             return None
             
+        # KORRIGIERT: analyze_structure jetzt robuster
         structure = analyze_structure(df_clean, symbol)
-        if not structure['structure_intact']:
+        
+        # KORRIGIERT: Prüfe ob structure gültig ist
+        if not structure or not isinstance(structure, dict):
+            logger.debug(f"{symbol}: Ungültiges Structure-Ergebnis")
+            return None
+            
+        if not structure.get('structure_intact', False):
             return None
             
         last_swing_low = structure.get('last_swing_low')
-        if last_swing_low is None or not np.isfinite(last_swing_low):
+        if last_swing_low is None or not np.isfinite(last_swing_low) or last_swing_low <= 0:
+            logger.debug(f"{symbol}: Ungültiges last_swing_low: {last_swing_low}")
             return None
             
         if current_price < last_swing_low * 0.98:
@@ -679,10 +773,11 @@ def analyze_smart(symbol, tier, total_tickers, market_ctx=None):
         
     except Exception as e:
         # KORRIGIERT: Weniger alarmierendes Logging bei Feiertagen
-        if "market_ctx" in str(e).lower() or "empty" in str(e).lower():
-            logger.debug(f"{symbol}: Analyse nicht möglich (Marktdaten unvollständig)")
+        error_msg = str(e).lower()
+        if any(x in error_msg for x in ['none', 'empty', 'nan', 'holiday', 'closed']):
+            logger.debug(f"{symbol}: Analyse nicht möglich (Marktdaten unvollständig): {e}")
         else:
-            logger.error(f"Analyse Fehler {symbol}: {str(e)}")
+            logger.error(f"Analyse Fehler {symbol}: {e}")
         return None
 
 # ============================== Alert Management ==============================
@@ -802,7 +897,6 @@ def render_card(item, container):
 # ============================== Main ==============================
 clock = get_market_clock()
 
-# NEU: Feiertags-Warnung anzeigen
 if clock.get('is_holiday'):
     st.markdown(f"""
     <div class="holiday-banner">
@@ -948,7 +1042,6 @@ if scan_triggered:
     with st.spinner("🔍 Scanne..."):
         market_ctx = get_market_context()
         
-        # NEU: Warnung wenn Markt geschlossen ist
         if market_ctx.get('market_closed'):
             st.warning("⚠️ Markt ist möglicherweise geschlossen (Feiertag/Wochenende). Daten können unvollständig sein.")
         
@@ -1019,7 +1112,6 @@ if scan_triggered:
         progress.empty()
         status_text.empty()
         
-        # NEU: Freundlichere Meldung bei Feiertagen
         if error_count > 0 and clock.get('is_holiday'):
             st.info(f"📊 Scan abgeschlossen: {success_count} Setups gefunden. {error_count} Tickers hatten keine Daten (Feiertag).")
         elif error_count > 0:
