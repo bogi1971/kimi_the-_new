@@ -33,9 +33,10 @@ def get_market_clock():
     pre_market = now.replace(hour=4, minute=0, second=0, microsecond=0)
     after_hours = now.replace(hour=20, minute=0, second=0, microsecond=0)
 
-    # Feiertage 2025
-    holidays_2025 = [(1, 1), (1, 20), (2, 17), (4, 18), (5, 26), (6, 19), (7, 4), (9, 1), (11, 27), (12, 25)]
-    is_holiday = (now.month, now.day) in holidays_2025
+    
+# Feiertage 2026
+    holidays_2026 = [(1, 1), (1, 19), (2, 16), (4, 3), (5, 25), (6, 19), (7, 3), (9, 7), (11, 26), (12, 25)]
+    is_holiday = (now.month, now.day) in holidays_2026
 
     if now.weekday() >= 5 or is_holiday:
         status = "CLOSED" if now.weekday() >= 5 else "HOLIDAY"
