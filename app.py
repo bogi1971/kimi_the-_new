@@ -115,24 +115,18 @@ MIN_PULLBACK_PERCENT = 0.10
 MAX_PULLBACK_PERCENT = 0.25
 AUTO_REFRESH_INTERVAL = 30
 MAX_WORKERS = 4
-# NEU: Alert-Cooldown in Minuten (verhindert Spam)
 ALERT_COOLDOWN_MINUTES = 60
 
-try:
-    TELEGRAM_BOT_TOKEN = st.secrets["telegram"]["bot_token"]
-    TELEGRAM_CHAT_ID = st.secrets["telegram"]["chat_id"]
-    FINNHUB_API_KEY = st.secrets["api_keys"]["finnhub"]
-    ALPHA_VANTAGE_KEYS = [
-        st.secrets["api_keys"]["alpha_vantage_1"],
-        st.secrets["api_keys"]["alpha_vantage_2"],
-        st.secrets["api_keys"]["alpha_vantage_3"]
-    ]
-except:
-    logger.warning("Secrets nicht gefunden, benutze Defaults.")
-    TELEGRAM_BOT_TOKEN = ""
-    TELEGRAM_CHAT_ID = ""
-    FINNHUB_API_KEY = ""
-    ALPHA_VANTAGE_KEYS = ["", "", ""]
+# ============================== API KEYS ==============================
+# KORRIGIERT: Deine Keys hier eingetragen
+TELEGRAM_BOT_TOKEN = "8317204351:AAHRu-mYYU0_NRIxNGEQ5voneIQaDKeQuF8"
+TELEGRAM_CHAT_ID = "5338135874"
+FINNHUB_API_KEY = "d652vnpr01qqbln5m9cgd652vnpr01qqbln5m9d0"
+ALPHA_VANTAGE_KEYS = [
+    "N6PM9UCXL55JZTN9",
+    "03d0c05583534ec8a42a9f470b4f5451",
+    "a2dd09107d62438c8546c31d36b33458"
+]
 
 DEFAULT_WATCHLIST = sorted(list(set([
     "ABBV", "ACHV", "ACRS", "ADMA", "ALDX", "ALNY", "AMD", "AMGN", "AMRN", "APLS", "AQST", "ASND",
@@ -149,8 +143,7 @@ DEFAULT_WATCHLIST = sorted(list(set([
 def init_session_state():
     defaults = {
         'watchlist': DEFAULT_WATCHLIST,
-        # NEU: Alerts mit Zeitstempel statt nur Set
-        'sent_alerts': {},  # Format: {symbol: {'timestamp': datetime, 'price': float, 'score': int}}
+        'sent_alerts': {},
         'api_stats': {
             'finnhub': 0,
             'alpha_vantage': 0,
@@ -162,7 +155,6 @@ def init_session_state():
         'auto_refresh': False,
         'refresh_count': 0,
         'last_auto_refresh': 0,
-        # NEU: Alert-History für UI-Anzeige
         'alert_history': [],
     }
     for k, v in defaults.items():
@@ -241,7 +233,6 @@ st.markdown("""
 .key-indicator { font-size: 0.7rem; padding: 2px 6px; border-radius: 4px; background: #2d2d2d; border: 1px solid #444; display: inline-block; margin: 2px; }
 .key-active { background: #1e3a1e; border-color: #00FF00; color: #00FF00; }
 .key-exhausted { background: #3a1e1e; border-color: #ff4b4b; color: #ff4b4b; }
-/* NEU: Alert-History Styles */
 .alert-history-item {
     background: #1a1a2e;
     border-left: 4px solid #00FF00;
@@ -660,7 +651,6 @@ def analyze_smart(symbol, tier, total_tickers, market_ctx=None):
         return None
 
 # ============================== Alert Management ==============================
-# NEU: Verbesserte Alert-Logik mit Cooldown
 def should_send_alert(symbol, current_price, current_score):
     """
     Prüft ob ein Alert gesendet werden soll basierend auf:
@@ -714,7 +704,7 @@ def record_alert(symbol, price, score, setup_type):
 # ============================== Telegram Alarm ==============================
 def send_telegram_alert(symbol, price, pullback_pct, news_item, setup_type, pe_ratio=None, api_sources=None, tier=None):
     if not TELEGRAM_BOT_TOKEN or len(TELEGRAM_BOT_TOKEN)<10:
-        return False  # NEU: Return False bei Fehler
+        return False
     
     news_title = news_item.get('title','')[:40] + '...' if news_item else 'Keine News'
     news_url = news_item.get('url','') if news_item else f'https://finance.yahoo.com/quote/{symbol}'
@@ -731,7 +721,7 @@ def send_telegram_alert(symbol, price, pullback_pct, news_item, setup_type, pe_r
     payload = {"chat_id": TELEGRAM_CHAT_ID, "text": msg, "parse_mode": "HTML", "disable_web_page_preview": True}
     try:
         requests.post(url, data=payload, timeout=5).raise_for_status()
-        return True  # NEU: Return True bei Erfolg
+        return True
     except Exception as e:
         logger.error(f"Telegram Fehlschlag: {e}")
         return False
@@ -864,12 +854,12 @@ with st.sidebar:
         st.session_state['auto_refresh'] = auto_mode
         st.rerun()
 
-    # NEU: Alert-History in Sidebar
+    # Alert-History in Sidebar
     st.divider()
     st.header("🚨 Alert History")
     alert_history = st.session_state.get('alert_history', [])
     if alert_history:
-        for alert in reversed(alert_history[-5:]):  # Letzte 5 Alerts
+        for alert in reversed(alert_history[-5:]):
             time_ago = int((datetime.now() - alert['timestamp']).total_seconds() / 60)
             st.markdown(f"""
 <div class="alert-history-item">
@@ -984,7 +974,7 @@ if scan_triggered:
         st.session_state['scan_results']=results
         st.session_state['last_scan_time']=datetime.now()
 
-        # KORRIGIERT: Alert-Logik mit Cooldown und Deduplizierung
+        # Alert-Logik mit Cooldown
         alerts_sent_this_scan = 0
         for item in results:
             if item['score'] > 75:
@@ -992,11 +982,9 @@ if scan_triggered:
                 price = item['price']
                 score = item['score']
                 
-                # Prüfen ob Alert gesendet werden soll
                 if should_send_alert(symbol, price, score):
                     setup_type = "CATALYST" if (item.get('news') and item['news'][0]['tier']==1) else "GOLD"
                     
-                    # Telegram senden
                     success = send_telegram_alert(
                         symbol, price, item['pullback_pct'], 
                         item['news'][0] if item.get('news') else None, 
@@ -1005,11 +993,8 @@ if scan_triggered:
                     )
                     
                     if success:
-                        # Alert speichern
                         record_alert(symbol, price, score, setup_type)
                         alerts_sent_this_scan += 1
-                        
-                        # Toast nur bei ersten 3 Alerts dieses Scans
                         if alerts_sent_this_scan <= 3:
                             st.toast(f"🚨 {setup_type} Alert: {symbol} @ ${price:.2f} (Score: {score})")
                 else:
@@ -1030,7 +1015,6 @@ if results:
             if last_time:
                 st.caption(f"Letzter Scan: {last_time.strftime('%H:%M:%S')}")
     
-    # NEU: Alert-Statistik anzeigen
     sent_alerts = st.session_state.get('sent_alerts', {})
     active_alerts = len([a for a in sent_alerts.values() if (datetime.now() - a['timestamp']).total_seconds() / 3600 < 24])
     st.info(f"📱 Aktive Alerts (24h): {active_alerts} | In Cooldown: {len(sent_alerts) - active_alerts}")
@@ -1074,7 +1058,6 @@ if results:
         ctx = get_market_context()
         st.write(f"**Marktkontext:** {'Risk-Off' if ctx.get('risk_off') else 'Risk-On'} (SPY: {ctx.get('spy_change',0):.2%}, VIX: {ctx.get('vix_level',0):.1f})")
         
-        # NEU: Alert-Details
         st.write("---")
         st.write("**Alert Status:**")
         for symbol, alert in list(st.session_state.get('sent_alerts', {}).items())[:5]:
