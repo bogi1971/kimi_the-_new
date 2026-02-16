@@ -103,7 +103,7 @@ def get_market_context():
 st.set_page_config(layout="wide", page_title="Elite Bull Scanner Pro V5.5", page_icon="🐂")
 MIN_PULLBACK_PERCENT = 0.10
 MAX_PULLBACK_PERCENT = 0.25
-AUTO_REFRESH_INTERVAL = 30
+AUTO_REFRESH_INTERVAL = 1800
 MAX_WORKERS = 4
 ALERT_COOLDOWN_MINUTES = 60
 
