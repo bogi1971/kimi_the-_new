@@ -9,7 +9,6 @@ from io import StringIO
 import warnings
 import pytz
 import logging
-import hashlib
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 warnings.filterwarnings('ignore')
@@ -24,7 +23,6 @@ def safe_requests_get(url, params=None, headers=None, timeout=10):
         return response
     except requests.RequestException as e:
         logger.error(f"API-Request Fehler: {e}")
-        st.error(f"API-Request Fehler: {e}")
         return None
 
 def get_market_clock():
@@ -35,12 +33,28 @@ def get_market_clock():
     pre_market = now.replace(hour=4, minute=0, second=0, microsecond=0)
     after_hours = now.replace(hour=20, minute=0, second=0, microsecond=0)
 
-    if now.weekday() >= 5:
-        status = "CLOSED"
+    # Feiertage 2025 (vereinfacht)
+    holidays_2025 = [
+        (1, 1),   # New Year's
+        (1, 20),  # MLK Day
+        (2, 17),  # Presidents' Day (morgen!)
+        (4, 18),  # Good Friday
+        (5, 26),  # Memorial Day
+        (6, 19),  # Juneteenth
+        (7, 4),   # Independence Day
+        (9, 1),   # Labor Day
+        (11, 27), # Thanksgiving
+        (12, 25), # Christmas
+    ]
+    
+    is_holiday = (now.month, now.day) in holidays_2025
+
+    if now.weekday() >= 5 or is_holiday:
+        status = "CLOSED" if now.weekday() >= 5 else "HOLIDAY"
         color = "#ff4b4b"
         bg_color = "#3a1e1e"
-        countdown = "Weekend"
-        next_event = "Monday 09:30 ET"
+        countdown = "Weekend" if now.weekday() >= 5 else "Holiday"
+        next_event = "Tuesday 09:30 ET" if is_holiday and now.weekday() == 0 else "Monday 09:30 ET"
         progress = 0
     elif now < pre_market:
         status = "CLOSED"
@@ -86,16 +100,16 @@ def get_market_clock():
         'countdown': countdown,
         'next_event': next_event,
         'progress': progress,
-        'is_open': status == "OPEN"
+        'is_open': status == "OPEN",
+        'is_holiday': is_holiday
     }
 
 def get_market_context():
-    """Analysiert den generellen Marktkontext (Risk-On/Off)"""
     try:
         spy = yf.Ticker("SPY")
         spy_data = spy.history(period="5d")
         if len(spy_data) < 2:
-            return {'risk_off': False, 'spy_change': 0}
+            return {'risk_off': False, 'spy_change': 0, 'market_closed': True}
         spy_change = (spy_data['Close'].iloc[-1] - spy_data['Close'].iloc[-2]) / spy_data['Close'].iloc[-2]
         try:
             vix = yf.Ticker("^VIX")
@@ -104,21 +118,20 @@ def get_market_context():
         except:
             vix_level = 20
         risk_off = (spy_change < -0.02) or (vix_level > 30)
-        return {'risk_off': risk_off, 'spy_change': spy_change, 'vix_level': vix_level}
+        return {'risk_off': risk_off, 'spy_change': spy_change, 'vix_level': vix_level, 'market_closed': False}
     except Exception as e:
         logger.error(f"Fehler beim Marktkontext: {e}")
-        return {'risk_off': False, 'spy_change': 0, 'vix_level': 20}
+        return {'risk_off': False, 'spy_change': 0, 'vix_level': 20, 'market_closed': True}
 
 # ============================== Konfiguration ==============================
-st.set_page_config(layout="wide", page_title="Elite Bull Scanner Pro V5.5 - Market Clock", page_icon="🐂")
+st.set_page_config(layout="wide", page_title="Elite Bull Scanner Pro V5.5", page_icon="🐂")
 MIN_PULLBACK_PERCENT = 0.10
 MAX_PULLBACK_PERCENT = 0.25
 AUTO_REFRESH_INTERVAL = 30
 MAX_WORKERS = 4
 ALERT_COOLDOWN_MINUTES = 60
 
-# ============================== API KEYS ==============================
-# KORRIGIERT: Deine Keys hier eingetragen
+# API KEYS
 TELEGRAM_BOT_TOKEN = "8317204351:AAHRu-mYYU0_NRIxNGEQ5voneIQaDKeQuF8"
 TELEGRAM_CHAT_ID = "5338135874"
 FINNHUB_API_KEY = "d652vnpr01qqbln5m9cgd652vnpr01qqbln5m9d0"
@@ -144,12 +157,7 @@ def init_session_state():
     defaults = {
         'watchlist': DEFAULT_WATCHLIST,
         'sent_alerts': {},
-        'api_stats': {
-            'finnhub': 0,
-            'alpha_vantage': 0,
-            'alpha_rotation_count': 0,
-            'cache_hits': 0
-        },
+        'api_stats': {'finnhub': 0, 'alpha_vantage': 0, 'alpha_rotation_count': 0, 'cache_hits': 0},
         'scan_results': [],
         'last_scan_time': None,
         'auto_refresh': False,
@@ -175,54 +183,18 @@ st.markdown("""
     margin: 10px 0;
     text-align: center;
 }
-.market-time {
-    font-size: 2.5rem;
-    font-weight: bold;
-    color: white;
-    font-family: 'Courier New', monospace;
-    text-shadow: 0 0 10px rgba(255,255,255,0.1);
-}
-.market-status {
-    display: inline-block;
-    padding: 8px 20px;
-    border-radius: 20px;
-    font-weight: bold;
-    font-size: 1.2rem;
-    margin: 10px 0;
-}
-.market-countdown {
-    font-size: 1.1rem;
-    color: #FFD700;
-    margin-top: 5px;
-}
-.market-progress {
-    width: 100%;
-    height: 6px;
-    background: #333;
-    border-radius: 3px;
-    margin-top: 10px;
-    overflow: hidden;
-}
-.market-progress-bar {
-    height: 100%;
-    background: linear-gradient(90deg, #238636, #00FF00);
-    border-radius: 3px;
-    transition: width 1s ease;
-}
+.market-time { font-size: 2.5rem; font-weight: bold; color: white; font-family: 'Courier New', monospace; }
+.market-status { display: inline-block; padding: 8px 20px; border-radius: 20px; font-weight: bold; font-size: 1.2rem; margin: 10px 0; }
+.market-countdown { font-size: 1.1rem; color: #FFD700; margin-top: 5px; }
+.market-progress { width: 100%; height: 6px; background: #333; border-radius: 3px; margin-top: 10px; overflow: hidden; }
+.market-progress-bar { height: 100%; background: linear-gradient(90deg, #238636, #00FF00); border-radius: 3px; transition: width 1s ease; }
 @keyframes greenPulse { 0% { box-shadow: 0 0 5px #00FF00; } 100% { box-shadow: 0 0 15px #00FF00; } }
-@keyframes purplePulse { 0% { box-shadow: 0 0 5px #9933ff; } 100% { box-shadow: 0 0 30px #bf80ff; } }
-@keyframes goldPulse { 0% { box-shadow: 0 0 5px #FFD700; } 100% { box-shadow: 0 0 25px #FFD700; } }
 .bull-card { background-color: #0d1f12; border: 2px solid #00FF00; border-radius: 10px; padding: 15px; text-align: center; margin-bottom: 10px; animation: greenPulse 2.0s infinite alternate; }
-.gold-card { background-color: #2b2b00; border: 3px solid #FFD700; border-radius: 10px; padding: 15px; text-align: center; margin-bottom: 10px; animation: goldPulse 1.5s infinite alternate; }
-.purple-card { background-color: #1a0033; border: 3px solid #9933ff; border-radius: 10px; padding: 15px; text-align: center; margin-bottom: 10px; animation: purplePulse 0.8s infinite alternate; }
 .bull-card h3 { color: #00FF00 !important; margin: 0; }
-.gold-card h3 { color: #FFD700 !important; margin: 0; text-shadow: 0 0 10px #FFD700; }
-.purple-card h3 { color: #bf80ff !important; margin: 0; text-shadow: 0 0 10px #9933ff; }
 .price { font-size: 1.8rem; font-weight: bold; color: white; margin: 10px 0; }
 .pullback-badge { background: linear-gradient(45deg, #ff6b6b, #ee5a24); color: white; padding: 4px 12px; border-radius: 12px; font-size: 0.9rem; font-weight: bold; display: inline-block; margin: 5px 0; }
 .tier-badge { background: linear-gradient(45deg, #667eea, #764ba2); color: white; padding: 2px 8px; border-radius: 8px; font-size: 0.7rem; display: inline-block; margin: 2px; }
 .cache-badge { background: linear-gradient(45deg, #11998e, #38ef7d); color: white; padding: 2px 6px; border-radius: 6px; font-size: 0.65rem; display: inline-block; margin: 2px; }
-.rotation-badge { background: linear-gradient(45deg, #ff6b6b, #feca57); color: white; padding: 2px 8px; border-radius: 8px; font-size: 0.7rem; display: inline-block; margin: 2px; }
 .stop-loss { color: #ff9999; font-weight: bold; font-size: 0.9rem; border: 1px solid #ff4b4b; border-radius: 4px; padding: 2px 8px; display: inline-block; }
 .target { color: #90EE90; font-weight: bold; font-size: 0.9rem; border: 1px solid #00FF00; border-radius: 4px; padding: 2px 8px; display: inline-block; margin-left: 5px; }
 .btn-link { display: inline-block; background-color: #262730; padding: 5px 15px; border-radius: 5px; text-decoration: none; font-size: 0.9rem; border: 1px solid #555; color: white !important; }
@@ -233,13 +205,16 @@ st.markdown("""
 .key-indicator { font-size: 0.7rem; padding: 2px 6px; border-radius: 4px; background: #2d2d2d; border: 1px solid #444; display: inline-block; margin: 2px; }
 .key-active { background: #1e3a1e; border-color: #00FF00; color: #00FF00; }
 .key-exhausted { background: #3a1e1e; border-color: #ff4b4b; color: #ff4b4b; }
-.alert-history-item {
-    background: #1a1a2e;
-    border-left: 4px solid #00FF00;
-    padding: 10px;
-    margin: 5px 0;
-    border-radius: 5px;
-    font-size: 0.85rem;
+.alert-history-item { background: #1a1a2e; border-left: 4px solid #00FF00; padding: 10px; margin: 5px 0; border-radius: 5px; font-size: 0.85rem; }
+/* NEU: Holiday Warning */
+.holiday-banner {
+    background: linear-gradient(90deg, #ff6b6b, #ffa502);
+    color: white;
+    padding: 15px;
+    border-radius: 10px;
+    text-align: center;
+    margin: 10px 0;
+    font-weight: bold;
 }
 </style>
 """, unsafe_allow_html=True)
@@ -287,9 +262,8 @@ class AlphaVantageManager:
     def __init__(self, keys):
         self.keys = [k for k in keys if k and len(k) > 10]
         self.current_index = 0
-        self.limiters = {}
-        for i, key in enumerate(self.keys):
-            self.limiters[i] = {'calls_today': 0, 'calls_per_min': [], 'key': key, 'exhausted': False}
+        self.limiters = {i: {'calls_today': 0, 'calls_per_min': [], 'key': k, 'exhausted': False} 
+                        for i, k in enumerate(self.keys)}
     def get_current_key(self):
         return self.keys[self.current_index] if self.keys else None
     def rotate_key(self):
@@ -328,25 +302,20 @@ class AlphaVantageManager:
             st.session_state['api_stats'] = stats
         return limiter['calls_today']
     def get_status(self):
-        status = []
-        for i, key in enumerate(self.keys):
-            limiter = self.limiters[i]
-            status.append({
-                'index': i,
-                'key': f"{key[:4]}...{key[-4:]}" if len(key)>8 else key,
-                'active': i == self.current_index,
-                'calls_today': limiter['calls_today'],
-                'exhausted': limiter['exhausted'],
-                'can_call': self.can_call(i)
-            })
-        return status
+        return [{
+            'index': i,
+            'key': f"{k[:4]}...{k[-4:]}" if len(k)>8 else k,
+            'active': i == self.current_index,
+            'calls_today': self.limiters[i]['calls_today'],
+            'exhausted': self.limiters[i]['exhausted'],
+            'can_call': self.can_call(i)
+        } for i, k in enumerate(self.keys)]
 
 finnhub_limiter = RateLimiter(60, 60)
 alpha_manager = AlphaVantageManager(ALPHA_VANTAGE_KEYS)
 
 # ============================== Analyse Funktionen ==============================
 def analyze_structure(df, symbol=None):
-    """Swing Highs / Lows Analyse"""
     if symbol:
         cache_key = f"structure_{symbol}"
         cached = structure_cache.get(cache_key, 300)
@@ -369,11 +338,13 @@ def analyze_structure(df, symbol=None):
             if len(swing_highs)>=3:
                 x = [swing_highs[-3][0], swing_highs[-2][0], swing_highs[-1][0]]
                 y = [swing_highs[-3][1], swing_highs[-2][1], swing_highs[-1][1]]
-                slope = simple_slope(x,y)
+                n = len(x)
+                x_mean, y_mean = sum(x)/n, sum(y)/n
+                num = sum((x[i]-x_mean)*(y[i]-y_mean) for i in range(n))
+                den = sum((x[i]-x_mean)**2 for i in range(n))
+                slope = num/den if den != 0 else 0
             result = {
-                'higher_highs': hh,
-                'higher_lows': hl,
-                'trend_slope': slope,
+                'higher_highs': hh, 'higher_lows': hl, 'trend_slope': slope,
                 'structure_intact': hh and hl,
                 'last_swing_low': swing_lows[-1][1],
                 'last_swing_high': swing_highs[-1][1]
@@ -395,19 +366,7 @@ def analyze_structure(df, symbol=None):
             'last_swing_high': df['High'].tail(20).max()
         }
 
-def simple_slope(x_list, y_list):
-    """Berechnet die Steigung"""
-    n = len(x_list)
-    if n<2:
-        return 0
-    x_mean = sum(x_list)/n
-    y_mean = sum(y_list)/n
-    numerator = sum((x_list[i]-x_mean)*(y_list[i]-y_mean) for i in range(n))
-    denominator = sum((x_list[i]-x_mean)**2 for i in range(n))
-    return numerator/denominator if denominator != 0 else 0
-
 def get_yahoo_news_fallback(symbol):
-    """Yahoo News fallback"""
     try:
         ticker = yf.Ticker(symbol)
         news = ticker.news
@@ -418,7 +377,6 @@ def get_yahoo_news_fallback(symbol):
     return []
 
 def get_finnhub_news_smart(symbol):
-    """Finnhub News mit Cache"""
     cache_key = f"fh_news_{symbol}"
     cached = news_cache.get(cache_key, 600)
     if cached:
@@ -459,7 +417,6 @@ def get_finnhub_news_smart(symbol):
     return [], False
 
 def get_alpha_vantage_smart(symbol):
-    """AlphaVantage mit Cache & Rotation"""
     cache_key = f"av_fund_{symbol}"
     cached = fundamentals_cache.get(cache_key, 3600)
     if cached:
@@ -506,7 +463,6 @@ def get_alpha_vantage_smart(symbol):
     return None, False
 
 def analyze_news_tiered(symbol, tier, prelim_score):
-    """Tiered News-Analyse"""
     keywords_tier1 = ['fda approval', 'fda approved', 'phase 3 success', 'merger', 'acquisition', 'buyout']
     keywords_tier2 = ['earnings beat', 'guidance raised', 'upgrade', 'partnership']
     news_items = []
@@ -540,95 +496,169 @@ def analyze_news_tiered(symbol, tier, prelim_score):
 
 # ============================== Analyse Hauptfunktion ==============================
 def analyze_smart(symbol, tier, total_tickers, market_ctx=None):
-    """Hauptanalyse Funktion"""
+    """Hauptanalyse Funktion - mit Feiertags-Handling"""
     try:
         ticker = yf.Ticker(symbol)
         df = ticker.history(period='3mo', interval='1h')
-        if df.empty or len(df)<50:
+        
+        # KORRIGIERT: Bessere Prüfung für Feiertage (leere/ungültige Daten)
+        if df is None or df.empty:
+            logger.debug(f"{symbol}: Keine Daten verfügbar (Feiertag/Markt geschlossen?)")
             return None
-        if df['Volume'].mean() < 50000:
+            
+        if len(df) < 50:
+            logger.debug(f"{symbol}: Zu wenig Daten ({len(df)} Zeilen) - möglicherweise Feiertag")
             return None
-        hourly_ret = df['Close'].pct_change().abs()
+            
+        # Prüfung auf ungültige Werte (NaN, Inf, 0)
+        if df['Close'].isna().all() or (df['Close'] == 0).all():
+            logger.debug(f"{symbol}: Keine gültigen Preisdaten")
+            return None
+            
+        # KORRIGIERT: Entferne NaN Zeilen für Berechnungen
+        df_clean = df.dropna()
+        if len(df_clean) < 30:
+            logger.debug(f"{symbol}: Zu wenig gültige Daten nach NaN-Entfernung")
+            return None
+            
+        if df_clean['Volume'].mean() < 50000:
+            return None
+            
+        hourly_ret = df_clean['Close'].pct_change().abs()
         if hourly_ret.max() > 0.3:
             return None
-        current_price = df['Close'].iloc[-1]
-        lookback = min(70, len(df)-10)
-        recent = df.tail(lookback)
-        recent_high = recent['High'].max()
+            
+        current_price = float(df_clean['Close'].iloc[-1])
+        if not np.isfinite(current_price) or current_price <= 0:
+            logger.debug(f"{symbol}: Ungültiger Preis: {current_price}")
+            return None
+        
+        lookback = min(70, len(df_clean)-10)
+        recent = df_clean.tail(lookback)
+        recent_high = float(recent['High'].max())
+        
+        if not np.isfinite(recent_high) or recent_high <= 0:
+            return None
+            
         pullback_pct = (recent_high - current_price) / recent_high
+        if not np.isfinite(pullback_pct):
+            return None
+            
         if pullback_pct < MIN_PULLBACK_PERCENT or pullback_pct > MAX_PULLBACK_PERCENT:
             return None
-        structure = analyze_structure(df, symbol)
+            
+        structure = analyze_structure(df_clean, symbol)
         if not structure['structure_intact']:
             return None
-        if current_price < structure['last_swing_low']*0.98:
+            
+        last_swing_low = structure.get('last_swing_low')
+        if last_swing_low is None or not np.isfinite(last_swing_low):
             return None
-        # Score
+            
+        if current_price < last_swing_low * 0.98:
+            return None
+            
+        # Score Berechnung
         score = 30
-        if structure['trend_slope'] > 0.02:
+        trend_slope = structure.get('trend_slope', 0)
+        if trend_slope is not None and np.isfinite(trend_slope) and trend_slope > 0.02:
             score += 15
+            
         # Volatilität
-        avg_vol = df['Volume'].tail(20).mean()
-        current_vol = df['Volume'].iloc[-1]
-        rvol = current_vol/avg_vol if avg_vol>0 else 1
+        avg_vol = df_clean['Volume'].tail(20).mean()
+        current_vol = df_clean['Volume'].iloc[-1]
+        rvol = current_vol/avg_vol if avg_vol>0 else 1.0
+        if not np.isfinite(rvol):
+            rvol = 1.0
+            
         if rvol>2:
             score += 20
         elif rvol>1.5:
             score += 10
+            
         # Unterstützung
-        support_dist = (current_price - structure['last_swing_low'])/current_price
+        support_dist = (current_price - last_swing_low)/current_price if current_price > 0 else 1.0
+        if not np.isfinite(support_dist):
+            support_dist = 1.0
+            
         if support_dist < 0.03:
             score += 15
         elif support_dist < 0.05:
             score += 8
+            
         # News & fundamentale Daten
         news, sources, cached_news = analyze_news_tiered(symbol, tier, score)
         if news:
             score += news[0]['score']
+            
         fundamentals, fund_cached = None, False
         if tier <= 15 and score >= 65:
             fundamentals, fund_cached = get_alpha_vantage_smart(symbol)
+            
         pe_ratio = None
         if fundamentals:
             pe_ratio = fundamentals.get('pe_ratio')
-            if pe_ratio:
+            if pe_ratio is not None and np.isfinite(pe_ratio):
                 if pe_ratio < 15:
                     score += 8
                 elif pe_ratio > 100:
                     score -= 5
+                    
         # ATR & Stop-Loss
-        atr = df['High'].rolling(14).max().mean() - df['Low'].rolling(14).min().mean()
-        technical_stop = structure['last_swing_low']*0.985
+        try:
+            high_roll = df_clean['High'].rolling(14).max()
+            low_roll = df_clean['Low'].rolling(14).min()
+            atr_series = high_roll - low_roll
+            atr = float(atr_series.mean())
+            if not np.isfinite(atr) or atr <= 0:
+                atr = current_price * 0.02
+        except Exception as e:
+            atr = current_price * 0.02
+            
+        technical_stop = last_swing_low * 0.985
         atr_stop = current_price - (2*atr)
         stop_loss = max(technical_stop, atr_stop)
-        recent_high = df['High'].max()
-        target1 = recent_high*0.98
-        target2 = current_price + (current_price - stop_loss)*2
+        
+        if not np.isfinite(stop_loss) or stop_loss <= 0 or stop_loss >= current_price:
+            return None
+            
+        recent_high = float(df_clean['High'].max())
+        if not np.isfinite(recent_high):
+            recent_high = current_price * 1.1
+            
+        target1 = recent_high * 0.98
+        target2 = current_price + (current_price - stop_loss) * 2
         target = min(target1, target2)
+        
+        if not np.isfinite(target) or target <= current_price:
+            return None
+            
         risk = current_price - stop_loss
         reward = target - current_price
-        rr_ratio = reward/risk if risk>0 else 0
-
-        if rr_ratio<1.5:
+        rr_ratio = reward/risk if risk > 0 else 0
+        
+        if not np.isfinite(rr_ratio) or rr_ratio < 1.5:
             return None
+            
         if market_ctx and market_ctx.get('risk_off'):
             score -= 10
-        if score<50:
+            
+        if score < 50:
             return None
-        # Gründe & Quellen
+            
+        # Gründe
         reasons = [f"📉 -{pullback_pct:.1f}%"]
-        if structure['trend_slope'] > 0.02:
+        if trend_slope is not None and np.isfinite(trend_slope) and trend_slope > 0.02:
             reasons.append("📈 Trend")
-        if rvol>1.5:
+        if rvol > 1.5:
             reasons.append(f"⚡ Vol {rvol:.1f}x")
-        if support_dist<0.03:
+        if support_dist < 0.03:
             reasons.append("🎯 Support")
         if news:
             reasons.append(f"📰 {news[0]['source']}")
-        if pe_ratio:
+        if pe_ratio is not None and np.isfinite(pe_ratio):
             reasons.append(f"{'💰' if pe_ratio<15 else '📊'} PE {pe_ratio:.1f}")
-        all_sources = [s for s in sources]
-        # Ergebnis
+            
         return {
             'symbol': symbol,
             'tier': tier,
@@ -643,21 +673,20 @@ def analyze_smart(symbol, tier, total_tickers, market_ctx=None):
             'reasons': reasons,
             'news': news,
             'pe_ratio': pe_ratio,
-            'api_sources': list(set(all_sources)),
+            'api_sources': list(set([s for s in sources])),
             'from_cache': cached_news or fund_cached
         }
+        
     except Exception as e:
-        logger.error(f"Analyse Fehler {symbol}: {e}")
+        # KORRIGIERT: Weniger alarmierendes Logging bei Feiertagen
+        if "market_ctx" in str(e).lower() or "empty" in str(e).lower():
+            logger.debug(f"{symbol}: Analyse nicht möglich (Marktdaten unvollständig)")
+        else:
+            logger.error(f"Analyse Fehler {symbol}: {str(e)}")
         return None
 
 # ============================== Alert Management ==============================
 def should_send_alert(symbol, current_price, current_score):
-    """
-    Prüft ob ein Alert gesendet werden soll basierend auf:
-    1. Cooldown-Zeit (keine Alerts für X Minuten nach letztem Alert)
-    2. Signifikanter Preisänderung (>2%)
-    3. Score-Verbesserung (>10 Punkte)
-    """
     sent_alerts = st.session_state.get('sent_alerts', {})
     now = datetime.now()
     
@@ -665,32 +694,26 @@ def should_send_alert(symbol, current_price, current_score):
         return True
     
     last_alert = sent_alerts[symbol]
-    time_diff = (now - last_alert['timestamp']).total_seconds() / 60  # Minuten
+    time_diff = (now - last_alert['timestamp']).total_seconds() / 60
     
-    # Cooldown noch aktiv?
     if time_diff < ALERT_COOLDOWN_MINUTES:
         return False
     
-    # Signifikante Änderung?
     price_change = abs(current_price - last_alert['price']) / last_alert['price']
     score_change = current_score - last_alert['score']
     
-    # Nur alerten wenn sich etwas signifikant geändert hat
     if price_change < 0.02 and score_change < 10:
-        logger.info(f"Alert für {symbol} unterdrückt: Keine signifikante Änderung (Preis: {price_change:.2%}, Score: +{score_change})")
         return False
     
     return True
 
 def record_alert(symbol, price, score, setup_type):
-    """Speichert einen Alert mit Zeitstempel"""
     st.session_state['sent_alerts'][symbol] = {
         'timestamp': datetime.now(),
         'price': price,
         'score': score,
         'setup_type': setup_type
     }
-    # Auch in History für UI-Anzeige
     st.session_state['alert_history'].append({
         'timestamp': datetime.now(),
         'symbol': symbol,
@@ -698,7 +721,6 @@ def record_alert(symbol, price, score, setup_type):
         'score': score,
         'setup_type': setup_type
     })
-    # History auf letzte 20 Einträge begrenzen
     st.session_state['alert_history'] = st.session_state['alert_history'][-20:]
 
 # ============================== Telegram Alarm ==============================
@@ -751,7 +773,6 @@ def render_card_html(sym, price, pullback, sl, target, rr, reasons, news_item, t
     return html
 
 def render_card(item, container):
-    """Karte rendern"""
     score = item['score']
     sym = item['symbol']
     price = item['price']
@@ -779,8 +800,17 @@ def render_card(item, container):
         st.markdown(html, unsafe_allow_html=True)
 
 # ============================== Main ==============================
-# Marktzeit
 clock = get_market_clock()
+
+# NEU: Feiertags-Warnung anzeigen
+if clock.get('is_holiday'):
+    st.markdown(f"""
+    <div class="holiday-banner">
+        🎌 US MARKET HOLIDAY - Presidents' Day 🎌<br>
+        <small>Markt ist geschlossen. Daten können unvollständig sein.</small>
+    </div>
+    """, unsafe_allow_html=True)
+
 st.markdown(f"""
 <div class="market-clock-container">
     <div class="market-time">{clock['time']}</div>
@@ -917,6 +947,11 @@ if st.button('🚀 Smart Scan Starten'):
 if scan_triggered:
     with st.spinner("🔍 Scanne..."):
         market_ctx = get_market_context()
+        
+        # NEU: Warnung wenn Markt geschlossen ist
+        if market_ctx.get('market_closed'):
+            st.warning("⚠️ Markt ist möglicherweise geschlossen (Feiertag/Wochenende). Daten können unvollständig sein.")
+        
         gainers = []
         try:
             headers={'User-Agent':'Mozilla/5.0'}
@@ -940,6 +975,10 @@ if scan_triggered:
         progress = st.progress(0)
         status_text = st.empty()
         use_parallel = len(scan_list)>20
+        
+        error_count = 0
+        success_count = 0
+        
         if use_parallel:
             with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
                 futures = {executor.submit(analyze_smart, sym, i+1, len(scan_list), market_ctx): (sym, i) for i, (sym,_) in enumerate(scan_list)}
@@ -952,10 +991,14 @@ if scan_triggered:
                             if not existing or res['score']>existing[0]['score']:
                                 results = [r for r in results if r['symbol']!=sym]
                                 results.append(res)
-                    except:
-                        pass
+                                success_count += 1
+                        else:
+                            error_count += 1
+                    except Exception as e:
+                        logger.error(f"Fehler bei {sym}: {e}")
+                        error_count += 1
                     progress.progress((idx+1)/len(scan_list))
-                    status_text.text(f"Analysiert: {sym} ({idx+1}/{len(scan_list)})")
+                    status_text.text(f"Analysiert: {sym} ({idx+1}/{len(scan_list)}) - OK:{success_count} Fehler:{error_count}")
         else:
             for i, (sym, _) in enumerate(scan_list):
                 tier = i+1
@@ -966,15 +1009,26 @@ if scan_triggered:
                     if not existing or res['score']>existing[0]['score']:
                         results = [r for r in results if r['symbol']!=sym]
                         results.append(res)
+                        success_count += 1
+                else:
+                    error_count += 1
                 progress.progress((i+1)/len(scan_list))
                 if i%10==0:
                     time.sleep(0.5)
+                    
         progress.empty()
         status_text.empty()
+        
+        # NEU: Freundlichere Meldung bei Feiertagen
+        if error_count > 0 and clock.get('is_holiday'):
+            st.info(f"📊 Scan abgeschlossen: {success_count} Setups gefunden. {error_count} Tickers hatten keine Daten (Feiertag).")
+        elif error_count > 0:
+            st.info(f"📊 Scan abgeschlossen: {success_count} Setups gefunden, {error_count} Fehler")
+        
         st.session_state['scan_results']=results
         st.session_state['last_scan_time']=datetime.now()
 
-        # Alert-Logik mit Cooldown
+        # Alert-Logik
         alerts_sent_this_scan = 0
         for item in results:
             if item['score'] > 75:
@@ -997,8 +1051,6 @@ if scan_triggered:
                         alerts_sent_this_scan += 1
                         if alerts_sent_this_scan <= 3:
                             st.toast(f"🚨 {setup_type} Alert: {symbol} @ ${price:.2f} (Score: {score})")
-                else:
-                    logger.info(f"Alert für {symbol} unterdrückt (Cooldown aktiv oder keine signifikante Änderung)")
 
 # Ergebnisse Anzeige
 results = st.session_state.get('scan_results', [])
