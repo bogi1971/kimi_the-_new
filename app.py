@@ -546,8 +546,8 @@ def get_yahoo_news_fallback(symbol):
     return []
 
 def analyze_news_tiered(symbol, tier, prelim_score):
-    keywords_tier1 = ['fda approval', 'fda approved', 'phase 3 success', 'merger', 'acquisition', 'buyout']
-    keywords_tier2 = ['earnings beat', 'guidance raised', 'upgrade', 'partnership']
+    keywords_tier1 = ['fda approval', 'fda approved', 'phase 3 success', 'phase 2 success', 'phase 1 success', 'merger', 'acquisition', 'buyout', 'zulassung', 'übernahmeangebot']
+    keywords_tier2 = ['earnings beat', 'guidance raised', 'upgrade', 'partnership', 'quartalszahlen']
     
     news_items = []
     sources = []
