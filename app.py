@@ -102,8 +102,8 @@ except:
     FINNHUB_API_KEY = "d652vnpr01qqbln5m9cgd652vnpr01qqbln5m9d0"
     ALPHA_VANTAGE_KEYS = [
         "N6PM9UCXL55JZTN9",
-        "DEIN_KEY_2_HIER",
-        "DEIN_KEY_3_HIER"
+        "03d0c05583534ec8a42a9f470b4f5451",
+        "a2dd09107d62438c8546c31d36b33458"
     ]
 
 MIN_PULLBACK_PERCENT = 0.10
