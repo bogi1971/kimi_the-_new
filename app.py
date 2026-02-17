@@ -9,6 +9,7 @@ from io import StringIO
 import warnings
 import pytz
 import logging
+import random
 
 warnings.filterwarnings('ignore')
 logging.basicConfig(level=logging.INFO)
@@ -97,8 +98,10 @@ def get_market_context():
 
 # ============================== Konfiguration ==============================
 st.set_page_config(layout="wide", page_title="Elite Bull Scanner Pro V5.5", page_icon="🐂")
-MIN_PULLBACK_PERCENT = 0.10
-MAX_PULLBACK_PERCENT = 0.25
+
+# KORRIGIERT: Lockerere Filter für mehr Treffer
+MIN_PULLBACK_PERCENT = 0.05    # Von 0.10 auf 0.05 (5% statt 10%)
+MAX_PULLBACK_PERCENT = 0.50    # Von 0.25 auf 0.50 (50% statt 25%)
 AUTO_REFRESH_INTERVAL = 1800
 ALERT_COOLDOWN_MINUTES = 60
 
@@ -574,28 +577,45 @@ def analyze_smart(symbol, tier, total_tickers, market_ctx=None):
     }
     
     try:
-        # YAHOO FINANCE
-        try:
-            ticker = yf.Ticker(symbol)
-            df = ticker.history(period='3mo', interval='1d')
-            
-            stats = st.session_state.get('api_stats', {})
-            stats['yahoo'] = stats.get('yahoo', 0) + 1
-            st.session_state['api_stats'] = stats
-            
-        except Exception as e:
-            debug_info['errors'].append(f"Yahoo Fehler: {e}")
+        # YAHOO FINANCE mit Retry-Logik
+        max_retries = 3
+        df = None
+        last_error = None
+        
+        for attempt in range(max_retries):
+            try:
+                ticker = yf.Ticker(symbol)
+                df = ticker.history(period='3mo', interval='1d')
+                
+                # Zähle erfolgreichen Call
+                stats = st.session_state.get('api_stats', {})
+                stats['yahoo'] = stats.get('yahoo', 0) + 1
+                st.session_state['api_stats'] = stats
+                
+                break  # Erfolg, Schleife verlassen
+                
+            except Exception as e:
+                last_error = str(e)
+                if "Too Many Requests" in last_error or "Rate limit" in last_error:
+                    # Längere Pause bei Rate-Limit
+                    wait_time = (attempt + 1) * 2 + random.uniform(0, 1)
+                    time.sleep(wait_time)
+                else:
+                    time.sleep(0.5)
+        
+        if df is None:
+            debug_info['errors'].append(f"Yahoo Fehler nach {max_retries} Versuchen: {last_error}")
             _log_scan_debug(debug_info)
             return None
         
-        if df is None or df.empty:
-            debug_info['errors'].append("Keine Yahoo Daten")
+        if df.empty:
+            debug_info['errors'].append("Yahoo Daten leer")
             _log_scan_debug(debug_info)
             return None
         
         debug_info['checks']['rows'] = len(df)
         
-        if len(df) < 20:
+        if len(df) < 15:  # Reduziert von 20 auf 15
             debug_info['errors'].append(f"Zu wenig Daten: {len(df)}")
             _log_scan_debug(debug_info)
             return None
@@ -614,7 +634,7 @@ def analyze_smart(symbol, tier, total_tickers, market_ctx=None):
             _log_scan_debug(debug_info)
             return None
         
-        lookback = min(50, len(df_clean)-5)
+        lookback = min(60, len(df_clean)-5)  # Erhöht von 50 auf 60
         recent = df_clean.tail(lookback)
         recent_high = float(recent['High'].max())
         debug_info['checks']['high'] = recent_high
@@ -627,16 +647,20 @@ def analyze_smart(symbol, tier, total_tickers, market_ctx=None):
         pullback_pct = (recent_high - current_price) / recent_high
         debug_info['checks']['pullback'] = f"{pullback_pct:.2%}"
         
-        if pullback_pct < 0.05 or pullback_pct > 0.40:
-            debug_info['errors'].append(f"Pullback {pullback_pct:.1%} außerhalb Range")
+        # KORRIGIERT: Lockerere Pullback-Grenzen
+        if pullback_pct < MIN_PULLBACK_PERCENT or pullback_pct > MAX_PULLBACK_PERCENT:
+            debug_info['errors'].append(f"Pullback {pullback_pct:.1%} außerhalb {MIN_PULLBACK_PERCENT:.0%}-{MAX_PULLBACK_PERCENT:.0%}")
             _log_scan_debug(debug_info)
             return None
             
+        # KORRIGIERT: Einfachere Struktur-Prüfung (nur Higher Lows statt HH+HL)
         structure = analyze_structure(df_clean, symbol)
         debug_info['checks']['structure'] = structure.get('structure_intact', False)
+        debug_info['checks']['higher_lows'] = structure.get('higher_lows', False)
         
-        if not structure.get('structure_intact', False):
-            debug_info['errors'].append("Struktur nicht intakt")
+        # Akzeptiere auch nur Higher Lows (schwächerer Trend aber noch bullisch)
+        if not structure.get('structure_intact', False) and not structure.get('higher_lows', False):
+            debug_info['errors'].append("Kein bullisher Trend (weder HH+HL noch nur HL)")
             _log_scan_debug(debug_info)
             return None
             
@@ -646,15 +670,24 @@ def analyze_smart(symbol, tier, total_tickers, market_ctx=None):
             _log_scan_debug(debug_info)
             return None
             
-        if current_price < last_swing_low * 0.95:
-            debug_info['errors'].append("Preis unter Swing Low")
+        # KORRIGIERT: Lockererer Support-Check
+        if current_price < last_swing_low * 0.90:  # Von 0.95 auf 0.90 (10% statt 5% unter SL)
+            debug_info['errors'].append("Preis zu weit unter Swing Low")
             _log_scan_debug(debug_info)
             return None
             
-        score = 30
+        # Score Berechnung
+        score = 25  # Basis-Score reduziert von 30 auf 25
+        
+        # Trend-Score (auch für nur Higher Lows)
+        if structure.get('structure_intact', False):
+            score += 15  # Voller Trend
+        elif structure.get('higher_lows', False):
+            score += 10  # Schwächerer Trend aber akzeptabel
+            
         trend_slope = structure.get('trend_slope', 0)
-        if trend_slope is not None and np.isfinite(trend_slope) and trend_slope > 0.01:
-            score += 15
+        if trend_slope is not None and np.isfinite(trend_slope) and trend_slope > 0.005:  # Reduziert von 0.01
+            score += 5
             
         avg_vol = df_clean['Volume'].mean()
         current_vol = df_clean['Volume'].iloc[-1]
@@ -662,13 +695,13 @@ def analyze_smart(symbol, tier, total_tickers, market_ctx=None):
         
         if rvol > 2:
             score += 20
-        elif rvol > 1.2:
+        elif rvol > 1.0:  # Reduziert von 1.2
             score += 10
             
         support_dist = (current_price - last_swing_low)/current_price if current_price > 0 else 1.0
-        if support_dist < 0.05:
+        if support_dist < 0.03:  # Reduziert von 0.05
             score += 15
-        elif support_dist < 0.10:
+        elif support_dist < 0.08:  # Reduziert von 0.10
             score += 8
             
         debug_info['checks']['score_pre'] = score
@@ -678,7 +711,7 @@ def analyze_smart(symbol, tier, total_tickers, market_ctx=None):
             score += news[0]['score']
             
         fundamentals, fund_cached = None, False
-        if score > 60 and tier <= 5:
+        if score > 55 and tier <= 10:  # Reduziert von 60 auf 55
             fundamentals, fund_cached = get_alpha_vantage_smart(symbol)
                 
         pe_ratio = None
@@ -697,8 +730,8 @@ def analyze_smart(symbol, tier, total_tickers, market_ctx=None):
         except:
             atr = current_price * 0.02
             
-        stop_loss = max(last_swing_low * 0.98, current_price - (2*atr))
-        target = min(recent_high * 0.98, current_price + (current_price - stop_loss) * 2)
+        stop_loss = max(last_swing_low * 0.97, current_price - (2*atr))  # Von 0.98 auf 0.97
+        target = min(recent_high * 0.97, current_price + (current_price - stop_loss) * 2)  # Von 0.98 auf 0.97
         
         if stop_loss <= 0 or stop_loss >= current_price or target <= current_price:
             debug_info['errors'].append("Ungültige SL/TP")
@@ -707,29 +740,32 @@ def analyze_smart(symbol, tier, total_tickers, market_ctx=None):
             
         rr_ratio = (target - current_price) / (current_price - stop_loss) if (current_price - stop_loss) > 0 else 0
         
-        if rr_ratio < 1.2:
+        if rr_ratio < 1.0:  # Reduziert von 1.2
             debug_info['errors'].append(f"R:R {rr_ratio:.2f} zu niedrig")
             _log_scan_debug(debug_info)
             return None
             
-        if score < 40:
+        if score < 35:  # Reduziert von 40 auf 35
             debug_info['errors'].append(f"Score {score} zu niedrig")
             _log_scan_debug(debug_info)
             return None
             
         reasons = [f"📉 -{pullback_pct:.1f}%"]
-        if trend_slope > 0.01:
-            reasons.append("📈 Trend")
-        if rvol > 1.2:
+        if structure.get('structure_intact', False):
+            reasons.append("📈 Trend stark")
+        elif structure.get('higher_lows', False):
+            reasons.append("📈 Trend schwach")
+        if rvol > 1.0:
             reasons.append(f"⚡ Vol {rvol:.1f}x")
-        if support_dist < 0.05:
-            reasons.append("🎯 Support")
+        if support_dist < 0.03:
+            reasons.append("🎯 Support nah")
         if news:
             reasons.append(f"📰 {news[0]['source']}")
         if pe_ratio is not None:
             reasons.append(f"{'💰' if pe_ratio<15 else '📊'} PE {pe_ratio:.1f}")
         
         debug_info['checks']['final_score'] = score
+        debug_info['checks']['rr'] = f"{rr_ratio:.2f}"
         debug_info['success'] = True
         _log_scan_debug(debug_info)
             
@@ -1102,12 +1138,19 @@ st.markdown("""
 </div>
 """, unsafe_allow_html=True)
 
+# KORRIGIERT: Filter-Einstellungen anzeigen
+st.markdown(f"""
+<div style="background: #1c1c1c; padding: 10px; border-radius: 5px; margin: 10px 0; font-size: 0.9rem;">
+<b>Aktuelle Filter:</b> Pullback {MIN_PULLBACK_PERCENT:.0%}-{MAX_PULLBACK_PERCENT:.0%} | Min Score 35 | Min R:R 1.0
+</div>
+""", unsafe_allow_html=True)
+
 # Scan Button
 scan_triggered = False
 if st.button('🚀 Smart Scan Starten', use_container_width=True):
     scan_triggered=True
 
-# Scan & Analyse - OHNE PARALLEL PROCESSING (sequentiell für Stabilität)
+# Scan & Analyse - MIT BESSERER RATE-LIMIT-HANDLING
 if scan_triggered:
     with st.spinner("🔍 Scanne mit Yahoo Finance..."):
         market_ctx = get_market_context()
@@ -1145,7 +1188,7 @@ if scan_triggered:
         error_count = 0
         success_count = 0
         
-        # SEQUENTIELLE VERARBEITUNG (kein ThreadPoolExecutor mehr!)
+        # SEQUENTIELLE VERARBEITUNG mit längeren Pausen
         for i, (sym, _) in enumerate(scan_list):
             tier = i+1
             status_text.text(f"Analysiere: {sym} ({tier}/{len(scan_list)}) - OK:{success_count} Fehler:{error_count}")
@@ -1166,9 +1209,9 @@ if scan_triggered:
             
             progress.progress((i+1)/len(scan_list))
             
-            # Kleine Pause alle 10 Aktien um Rate-Limits zu vermeiden
-            if i % 10 == 0 and i > 0:
-                time.sleep(0.5)
+            # KORRIGIERT: Längere Pause alle 5 Aktien (statt 10) um Rate-Limits zu vermeiden
+            if i % 5 == 0 and i > 0:
+                time.sleep(1.0)  # Von 0.5 auf 1.0 Sekunden erhöht
                     
         progress.empty()
         status_text.empty()
