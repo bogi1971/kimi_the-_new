@@ -931,9 +931,11 @@ if results:
             ago = int((datetime.now() - alert['timestamp']).total_seconds() / 60)
             st.write(f"  • {symbol}: {alert['setup_type']} vor {ago}min @ ${alert['price']:.2f}")
 else:
+alerts = st.session_state.get('sent_alerts', {})
+if alerts:
+    st.write("**Letzte Alerts:**")
+    for symbol, alert in list(alerts.items())[:5]:
+        ago = int((datetime.now() - alert['timestamp']).total_seconds() / 60)
+        st.write(f"  • {symbol}: {alert['setup_type']} vor {ago}min @ ${alert['price']:.2f}")
+else:
     st.info("👆 Klicke 'Smart Scan Starten' um die Watchlist zu analysieren!")
-```
-
----
-
-Wenn du noch spezielle Anpassungen brauchst oder Fragen hast, sag einfach Bescheid!
