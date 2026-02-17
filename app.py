@@ -1,6 +1,3 @@
-Hier ist dein vollständiger, korrigierter Python-Code mit Reihennummern für eine bessere Übersicht. Ich habe die Zeilennummern in Kommentaren am Anfang jeder Zeile eingefügt:
-
-```python
 1  import streamlit as st
 2  import yfinance as yf
 3  import pandas as pd
