@@ -9,7 +9,6 @@ from io import StringIO
 import warnings
 import pytz
 import logging
-from concurrent.futures import ThreadPoolExecutor, as_completed
 
 warnings.filterwarnings('ignore')
 logging.basicConfig(level=logging.INFO)
@@ -31,7 +30,6 @@ def get_market_clock():
     market_open = now.replace(hour=9, minute=30, second=0, microsecond=0)
     market_close = now.replace(hour=16, minute=0, second=0, microsecond=0)
     pre_market = now.replace(hour=4, minute=0, second=0, microsecond=0)
-    after_hours = now.replace(hour=20, minute=0, second=0, microsecond=0)
 
     holidays_2026 = [(1, 1), (1, 19), (2, 16), (4, 3), (5, 25), (6, 19), (7, 3), (9, 7), (11, 26), (12, 25)]
     is_holiday = (now.month, now.day) in holidays_2026
@@ -102,7 +100,6 @@ st.set_page_config(layout="wide", page_title="Elite Bull Scanner Pro V5.5", page
 MIN_PULLBACK_PERCENT = 0.10
 MAX_PULLBACK_PERCENT = 0.25
 AUTO_REFRESH_INTERVAL = 1800
-MAX_WORKERS = 4
 ALERT_COOLDOWN_MINUTES = 60
 
 # API KEYS
@@ -131,14 +128,13 @@ def init_session_state():
     defaults = {
         'watchlist': DEFAULT_WATCHLIST,
         'sent_alerts': {},
-        'api_stats': {'finnhub': 0, 'alpha_vantage': 0, 'alpha_rotation_count': 0, 'cache_hits': 0, 'yahoo': 0},
+        'api_stats': {'yahoo': 0, 'finnhub': 0, 'alpha_vantage': 0, 'cache_hits': 0, 'alpha_rotation_count': 0},
         'scan_results': [],
         'last_scan_time': None,
         'auto_refresh': False,
         'refresh_count': 0,
         'last_auto_refresh': 0,
         'alert_history': [],
-        'debug_calls': [],
         'scan_debug': [],
     }
     for k, v in defaults.items():
@@ -191,10 +187,9 @@ st.markdown("""
     margin: 10px 0;
     font-weight: bold;
 }
-.debug-log { background: #0d1117; border: 1px solid #30363d; padding: 10px; border-radius: 5px; font-family: monospace; font-size: 0.75rem; max-height: 200px; overflow-y: auto; }
-.error-box { background: #ff4b4b20; border: 2px solid #ff4b4b; color: #ff9999; padding: 15px; border-radius: 10px; margin: 10px 0; }
-.warning-box { background: #ffa50220; border: 2px solid #ffa502; color: #ffcc00; padding: 15px; border-radius: 10px; margin: 10px 0; }
 .info-box { background: #23863620; border: 2px solid #238636; color: #7ee787; padding: 15px; border-radius: 10px; margin: 10px 0; }
+.warning-box { background: #ffa50220; border: 2px solid #ffa502; color: #ffcc00; padding: 15px; border-radius: 10px; margin: 10px 0; }
+.error-box { background: #ff4b4b20; border: 2px solid #ff4b4b; color: #ff9999; padding: 15px; border-radius: 10px; margin: 10px 0; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -241,7 +236,7 @@ class AlphaVantageManager:
     def __init__(self, keys):
         self.keys = [k for k in keys if k and len(k) > 10]
         self.current_index = 0
-        self.limiters = {i: {'calls_today': 0, 'calls_per_min': [], 'key': k, 'exhausted': False, 'limit_reached_message': None} 
+        self.limiters = {i: {'calls_today': 0, 'calls_per_min': [], 'key': k, 'exhausted': False} 
                         for i, k in enumerate(self.keys)}
     def get_current_key(self):
         return self.keys[self.current_index] if self.keys else None
@@ -266,7 +261,7 @@ class AlphaVantageManager:
         limiter['calls_per_min'] = [c for c in limiter['calls_per_min'] if now - c < 60]
         if len(limiter['calls_per_min']) >= 5:
             return False
-        if limiter['calls_today'] >= 25:  # 25 pro Tag!
+        if limiter['calls_today'] >= 25:
             limiter['exhausted'] = True
             return False
         return True
@@ -280,9 +275,6 @@ class AlphaVantageManager:
             stats['alpha_vantage'] = stats.get('alpha_vantage', 0) + 1
             st.session_state['api_stats'] = stats
         return limiter['calls_today']
-    def set_limit_message(self, key_index, message):
-        self.limiters[key_index]['limit_reached_message'] = message
-        self.limiters[key_index]['exhausted'] = True
     def get_status(self):
         return [{
             'index': i,
@@ -290,8 +282,7 @@ class AlphaVantageManager:
             'active': i == self.current_index,
             'calls_today': self.limiters[i]['calls_today'],
             'exhausted': self.limiters[i]['exhausted'],
-            'can_call': self.can_call(i),
-            'limit_message': self.limiters[i].get('limit_reached_message', '')
+            'can_call': self.can_call(i)
         } for i, k in enumerate(self.keys)]
 
 finnhub_limiter = RateLimiter(60, 60)
@@ -299,7 +290,6 @@ alpha_manager = AlphaVantageManager(ALPHA_VANTAGE_KEYS)
 
 # ============================== Analyse Funktionen ==============================
 def analyze_structure(df, symbol=None):
-    """Swing Highs / Lows Analyse"""
     if df is None or not isinstance(df, pd.DataFrame) or df.empty:
         return _default_structure_result()
     
@@ -409,19 +399,16 @@ def _default_structure_result(df=None):
 
 
 def get_yahoo_news_fallback(symbol):
-    """Yahoo Finance News - Fallback wenn Finnhub nicht verfügbar"""
     try:
         ticker = yf.Ticker(symbol)
         news = ticker.news
         if news:
-            # Yahoo News zählt nicht als API-Call (kommt mit Ticker-Daten)
             return [{'headline': n.get('title'), 'url': n.get('link'), 'source': 'Yahoo', 'datetime': 0} for n in news[:5]]
     except Exception as e:
         logger.error(f"Yahoo News Fehler für {symbol}: {e}")
     return []
 
 def get_finnhub_news_smart(symbol):
-    """Finnhub News - 60 Calls/Minute"""
     cache_key = f"fh_news_{symbol}"
     cached = news_cache.get(cache_key, 600)
     if cached:
@@ -470,7 +457,6 @@ def get_finnhub_news_smart(symbol):
         return [], False
 
 def get_alpha_vantage_smart(symbol):
-    """Alpha Vantage - nur 25/Tag! Sehr sparsam nutzen."""
     cache_key = f"av_fund_{symbol}"
     cached = fundamentals_cache.get(cache_key, 3600)
     if cached:
@@ -506,8 +492,7 @@ def get_alpha_vantage_smart(symbol):
                     data = response.json()
                     
                     if 'Note' in data or 'Information' in data:
-                        message = data.get('Note', data.get('Information', ''))
-                        alpha_manager.set_limit_message(alpha_manager.current_index, message)
+                        alpha_manager.limiters[alpha_manager.current_index]['exhausted'] = True
                         alpha_manager.rotate_key()
                         attempts += 1
                         time.sleep(1)
@@ -547,14 +532,12 @@ def get_alpha_vantage_smart(symbol):
     return None, False
 
 def analyze_news_tiered(symbol, tier, prelim_score):
-    """News-Analyse: Finnhub (API) > Yahoo (Fallback)"""
     keywords_tier1 = ['fda approval', 'fda approved', 'phase 3 success', 'merger', 'acquisition', 'buyout']
     keywords_tier2 = ['earnings beat', 'guidance raised', 'upgrade', 'partnership']
     news_items = []
     sources = []
     from_cache = False
 
-    # 1. Versuch: Finnhub (API-Call, 60/min)
     if prelim_score > 50:
         fh_news, cached = get_finnhub_news_smart(symbol)
         from_cache = cached
@@ -567,7 +550,6 @@ def analyze_news_tiered(symbol, tier, prelim_score):
                 elif any(k in title for k in keywords_tier2):
                     news_items.append({'title': item['headline'], 'url': item['url'], 'tier': 2, 'score': 25, 'source': 'FH'})
 
-    # 2. Fallback: Yahoo Finance (kostenlos, mit Ticker-Daten)
     if not news_items:
         yh_news = get_yahoo_news_fallback(symbol)
         if yh_news:
@@ -584,7 +566,6 @@ def analyze_news_tiered(symbol, tier, prelim_score):
 
 # ============================== Analyse Hauptfunktion ==============================
 def analyze_smart(symbol, tier, total_tickers, market_ctx=None):
-    """Hauptanalyse mit Yahoo Finance als Basis"""
     debug_info = {
         'symbol': symbol,
         'tier': tier,
@@ -593,72 +574,66 @@ def analyze_smart(symbol, tier, total_tickers, market_ctx=None):
     }
     
     try:
-        # YAHOO FINANCE - Primäre Datenquelle (immer verfügbar!)
+        # YAHOO FINANCE
         try:
             ticker = yf.Ticker(symbol)
             df = ticker.history(period='3mo', interval='1d')
             
-            # Zähle Yahoo Call
             stats = st.session_state.get('api_stats', {})
             stats['yahoo'] = stats.get('yahoo', 0) + 1
             st.session_state['api_stats'] = stats
             
         except Exception as e:
-            debug_info['errors'].append(f"Yahoo Finance Fehler: {e}")
+            debug_info['errors'].append(f"Yahoo Fehler: {e}")
             _log_scan_debug(debug_info)
             return None
         
-        # Daten-Validierung
         if df is None or df.empty:
-            debug_info['errors'].append("Keine Daten von Yahoo Finance")
+            debug_info['errors'].append("Keine Yahoo Daten")
             _log_scan_debug(debug_info)
             return None
         
-        debug_info['checks']['data_rows'] = len(df)
-        debug_info['checks']['source'] = 'Yahoo Finance'
+        debug_info['checks']['rows'] = len(df)
         
         if len(df) < 20:
-            debug_info['errors'].append(f"Zu wenig Daten: {len(df)} Zeilen")
+            debug_info['errors'].append(f"Zu wenig Daten: {len(df)}")
             _log_scan_debug(debug_info)
             return None
             
         df_clean = df.dropna()
         if len(df_clean) < 10:
-            debug_info['errors'].append(f"Zu wenig gültige Daten: {len(df_clean)}")
+            debug_info['errors'].append(f"Zu wenig gültig: {len(df_clean)}")
             _log_scan_debug(debug_info)
             return None
         
-        # Preis-Checks
         current_price = float(df_clean['Close'].iloc[-1])
-        debug_info['checks']['current_price'] = current_price
+        debug_info['checks']['price'] = current_price
         
         if not np.isfinite(current_price) or current_price <= 0:
             debug_info['errors'].append(f"Ungültiger Preis: {current_price}")
             _log_scan_debug(debug_info)
             return None
         
-        # Pullback-Berechnung
         lookback = min(50, len(df_clean)-5)
         recent = df_clean.tail(lookback)
         recent_high = float(recent['High'].max())
-        debug_info['checks']['recent_high'] = recent_high
+        debug_info['checks']['high'] = recent_high
         
         if not np.isfinite(recent_high) or recent_high <= 0:
-            debug_info['errors'].append("Kein gültiges recent_high")
+            debug_info['errors'].append("Kein High")
             _log_scan_debug(debug_info)
             return None
             
         pullback_pct = (recent_high - current_price) / recent_high
-        debug_info['checks']['pullback_pct'] = f"{pullback_pct:.2%}"
+        debug_info['checks']['pullback'] = f"{pullback_pct:.2%}"
         
         if pullback_pct < 0.05 or pullback_pct > 0.40:
-            debug_info['errors'].append(f"Pullback außerhalb Range: {pullback_pct:.1%}")
+            debug_info['errors'].append(f"Pullback {pullback_pct:.1%} außerhalb Range")
             _log_scan_debug(debug_info)
             return None
             
-        # Struktur-Analyse
         structure = analyze_structure(df_clean, symbol)
-        debug_info['checks']['structure_intact'] = structure.get('structure_intact', False)
+        debug_info['checks']['structure'] = structure.get('structure_intact', False)
         
         if not structure.get('structure_intact', False):
             debug_info['errors'].append("Struktur nicht intakt")
@@ -667,22 +642,20 @@ def analyze_smart(symbol, tier, total_tickers, market_ctx=None):
             
         last_swing_low = structure.get('last_swing_low')
         if last_swing_low is None or not np.isfinite(last_swing_low) or last_swing_low <= 0:
-            debug_info['errors'].append("Kein gültiger Swing Low")
+            debug_info['errors'].append("Kein Swing Low")
             _log_scan_debug(debug_info)
             return None
             
         if current_price < last_swing_low * 0.95:
-            debug_info['errors'].append(f"Preis unter Swing Low")
+            debug_info['errors'].append("Preis unter Swing Low")
             _log_scan_debug(debug_info)
             return None
             
-        # Score Berechnung
         score = 30
         trend_slope = structure.get('trend_slope', 0)
         if trend_slope is not None and np.isfinite(trend_slope) and trend_slope > 0.01:
             score += 15
             
-        # Volumen
         avg_vol = df_clean['Volume'].mean()
         current_vol = df_clean['Volume'].iloc[-1]
         rvol = current_vol/avg_vol if avg_vol > 0 else 1.0
@@ -692,27 +665,21 @@ def analyze_smart(symbol, tier, total_tickers, market_ctx=None):
         elif rvol > 1.2:
             score += 10
             
-        # Support
         support_dist = (current_price - last_swing_low)/current_price if current_price > 0 else 1.0
         if support_dist < 0.05:
             score += 15
         elif support_dist < 0.10:
             score += 8
             
-        debug_info['checks']['preliminary_score'] = score
+        debug_info['checks']['score_pre'] = score
         
-        # NEWS (Finnhub > Yahoo)
         news, sources, cached_news = analyze_news_tiered(symbol, tier, score)
         if news:
             score += news[0]['score']
-            debug_info['checks']['news_source'] = news[0]['source']
             
-        # ALPHA VANTAGE - Nur für Top-Setups (25/Tag Limit!)
         fundamentals, fund_cached = None, False
-        if score > 60 and tier <= 5:  # Nur Top 5!
+        if score > 60 and tier <= 5:
             fundamentals, fund_cached = get_alpha_vantage_smart(symbol)
-            if fundamentals:
-                debug_info['checks']['fundamentals'] = 'Alpha Vantage'
                 
         pe_ratio = None
         if fundamentals:
@@ -723,7 +690,6 @@ def analyze_smart(symbol, tier, total_tickers, market_ctx=None):
                 elif pe_ratio > 100:
                     score -= 5
                     
-        # Stop-Loss & Target
         try:
             atr = float((df_clean['High'].rolling(14).max() - df_clean['Low'].rolling(14).min()).mean())
             if not np.isfinite(atr) or atr <= 0:
@@ -735,23 +701,22 @@ def analyze_smart(symbol, tier, total_tickers, market_ctx=None):
         target = min(recent_high * 0.98, current_price + (current_price - stop_loss) * 2)
         
         if stop_loss <= 0 or stop_loss >= current_price or target <= current_price:
-            debug_info['errors'].append("Ungültige Stop-Loss/Target Berechnung")
+            debug_info['errors'].append("Ungültige SL/TP")
             _log_scan_debug(debug_info)
             return None
             
         rr_ratio = (target - current_price) / (current_price - stop_loss) if (current_price - stop_loss) > 0 else 0
         
         if rr_ratio < 1.2:
-            debug_info['errors'].append(f"R:R zu niedrig: {rr_ratio:.2f}")
+            debug_info['errors'].append(f"R:R {rr_ratio:.2f} zu niedrig")
             _log_scan_debug(debug_info)
             return None
             
         if score < 40:
-            debug_info['errors'].append(f"Score zu niedrig: {score}")
+            debug_info['errors'].append(f"Score {score} zu niedrig")
             _log_scan_debug(debug_info)
             return None
             
-        # Gründe
         reasons = [f"📉 -{pullback_pct:.1f}%"]
         if trend_slope > 0.01:
             reasons.append("📈 Trend")
@@ -792,7 +757,6 @@ def analyze_smart(symbol, tier, total_tickers, market_ctx=None):
         return None
 
 def _log_scan_debug(debug_info):
-    """Speichert Debug-Info"""
     scan_debug = st.session_state.get('scan_debug', [])
     scan_debug.append(debug_info)
     st.session_state['scan_debug'] = scan_debug[-100:]
@@ -949,7 +913,6 @@ with st.sidebar:
     st.header("📡 API Status")
     stats = st.session_state.get('api_stats', {'yahoo':0,'finnhub':0,'alpha_vantage':0,'cache_hits':0,'alpha_rotation_count':0})
     
-    # Yahoo Finance Status
     yahoo_calls = stats.get('yahoo', 0)
     st.markdown(f"""
     <div class="info-box">
@@ -959,7 +922,6 @@ with st.sidebar:
     </div>
     """, unsafe_allow_html=True)
     
-    # Finnhub Status
     fh_status = "🟢" if finnhub_limiter.can_call() else "🔴"
     st.markdown(f"""
     <div class="api-stat">
@@ -970,7 +932,6 @@ with st.sidebar:
     </div>
     """, unsafe_allow_html=True)
     
-    # Alpha Vantage Status
     alpha_status_list = alpha_manager.get_status()
     all_alpha_exhausted = all(s['exhausted'] for s in alpha_status_list)
     
@@ -1009,7 +970,7 @@ with st.sidebar:
                 ticker = yf.Ticker("AAPL")
                 data = ticker.history(period="5d")
                 if not data.empty:
-                    st.success(f"✅ Yahoo OK! {len(data)} Tage Daten")
+                    st.success(f"✅ Yahoo OK! {len(data)} Tage")
                     stats = st.session_state.get('api_stats', {})
                     stats['yahoo'] = stats.get('yahoo', 0) + 1
                     st.session_state['api_stats'] = stats
@@ -1042,36 +1003,23 @@ with st.sidebar:
                     'Price': result['price'],
                     'Pullback': f"{result['pullback_pct']:.1%}",
                     'R:R': f"{result['rr_ratio']:.1f}x",
-                    'APIs': result['api_sources'],
-                    'News': len(result['news']) if result['news'] else 0
+                    'APIs': result['api_sources']
                 })
             else:
                 st.error(f"❌ Kein Setup für {manual_symbol}")
-                # Zeige Debug-Info
                 scan_debug = st.session_state.get('scan_debug', [])
                 if scan_debug:
                     last = scan_debug[-1]
-                    st.write("Letzte Prüfung:", last.get('checks', {}))
+                    st.write("Checks:", last.get('checks', {}))
                     st.write("Fehler:", last.get('errors', []))
-    
-    # Logs
-    with st.expander("📋 API Call Log"):
-        debug_logs = st.session_state.get('debug_calls', [])
-        if debug_logs:
-            for log in reversed(debug_logs[-20:]):
-                st.text(log)
-        else:
-            st.caption("Noch keine Calls")
     
     if st.button("🔄 Stats zurücksetzen", use_container_width=True):
         st.session_state['api_stats'] = {'yahoo':0,'finnhub':0,'alpha_vantage':0,'cache_hits':0,'alpha_rotation_count':0}
-        st.session_state['debug_calls'] = []
         st.session_state['scan_debug'] = []
         for i in alpha_manager.limiters:
             alpha_manager.limiters[i]['exhausted'] = False
             alpha_manager.limiters[i]['calls_today'] = 0
             alpha_manager.limiters[i]['calls_per_min'] = []
-            alpha_manager.limiters[i]['limit_reached_message'] = None
         st.success("Zurückgesetzt!")
         st.rerun()
 
@@ -1159,7 +1107,7 @@ scan_triggered = False
 if st.button('🚀 Smart Scan Starten', use_container_width=True):
     scan_triggered=True
 
-# Scan & Analyse
+# Scan & Analyse - OHNE PARALLEL PROCESSING (sequentiell für Stabilität)
 if scan_triggered:
     with st.spinner("🔍 Scanne mit Yahoo Finance..."):
         market_ctx = get_market_context()
@@ -1193,35 +1141,16 @@ if scan_triggered:
         results = []
         progress = st.progress(0)
         status_text = st.empty()
-        use_parallel = len(scan_list)>20
         
         error_count = 0
         success_count = 0
         
-        if use_parallel:
-            with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
-                futures = {executor.submit(analyze_smart, sym, i+1, len(scan_list), market_ctx): (sym, i) for i, (sym,_) in enumerate(scan_list)}
-                for future in as_completed(futures):
-                    sym, idx = futures[future]
-                    try:
-                        res = future.result()
-                        if res:
-                            existing = [r for r in results if r['symbol']==sym]
-                            if not existing or res['score']>existing[0]['score']:
-                                results = [r for r in results if r['symbol']!=sym]
-                                results.append(res)
-                                success_count += 1
-                        else:
-                            error_count += 1
-                    except Exception as e:
-                        logger.error(f"Fehler bei {sym}: {e}")
-                        error_count += 1
-                    progress.progress((idx+1)/len(scan_list))
-                    status_text.text(f"Yahoo: {sym} ({idx+1}/{len(scan_list)}) - OK:{success_count} Fehler:{error_count}")
-        else:
-            for i, (sym, _) in enumerate(scan_list):
-                tier = i+1
-                status_text.text(f"Yahoo: {sym} ({tier}/{len(scan_list)})")
+        # SEQUENTIELLE VERARBEITUNG (kein ThreadPoolExecutor mehr!)
+        for i, (sym, _) in enumerate(scan_list):
+            tier = i+1
+            status_text.text(f"Analysiere: {sym} ({tier}/{len(scan_list)}) - OK:{success_count} Fehler:{error_count}")
+            
+            try:
                 res = analyze_smart(sym, tier, len(scan_list), market_ctx)
                 if res:
                     existing = [r for r in results if r['symbol']==sym]
@@ -1231,24 +1160,30 @@ if scan_triggered:
                         success_count += 1
                 else:
                     error_count += 1
-                progress.progress((i+1)/len(scan_list))
-                if i%10==0:
-                    time.sleep(0.5)
+            except Exception as e:
+                logger.error(f"Fehler bei {sym}: {e}")
+                error_count += 1
+            
+            progress.progress((i+1)/len(scan_list))
+            
+            # Kleine Pause alle 10 Aktien um Rate-Limits zu vermeiden
+            if i % 10 == 0 and i > 0:
+                time.sleep(0.5)
                     
         progress.empty()
         status_text.empty()
         
         scan_debug = st.session_state.get('scan_debug', [])
-        rejected = [d for d in scan_debug if not d.get('success')]
         
-        st.info(f"📊 Scan abgeschlossen: {success_count} Setups gefunden, {error_count} abgelehnt (Yahoo Finance: {stats.get('yahoo', 0)} Calls)")
+        st.info(f"📊 Scan abgeschlossen: {success_count} Setups gefunden, {error_count} abgelehnt")
         
-        if rejected:
+        if error_count > 0:
             error_counts = {}
-            for item in rejected:
-                for err in item.get('errors', []):
-                    key = err.split(':')[0] if ':' in err else err[:30]
-                    error_counts[key] = error_counts.get(key, 0) + 1
+            for item in scan_debug:
+                if not item.get('success'):
+                    for err in item.get('errors', []):
+                        key = err.split(':')[0] if ':' in err else err[:30]
+                        error_counts[key] = error_counts.get(key, 0) + 1
             
             with st.expander(f"⚠️ Häufigste Ablehnungsgründe"):
                 for err, count in sorted(error_counts.items(), key=lambda x: x[1], reverse=True)[:5]:
