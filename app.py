@@ -131,14 +131,14 @@ def init_session_state():
     defaults = {
         'watchlist': DEFAULT_WATCHLIST,
         'sent_alerts': {},
-        'api_stats': {'finnhub': 0, 'alpha_vantage': 0, 'alpha_rotation_count': 0, 'cache_hits': 0},
+        'api_stats': {'finnhub': 0, 'alpha_vantage': 0, 'alpha_rotation_count': 0, 'cache_hits': 0, 'yahoo': 0},
         'scan_results': [],
         'last_scan_time': None,
         'auto_refresh': False,
         'refresh_count': 0,
         'last_auto_refresh': 0,
         'alert_history': [],
-        'debug_alpha_calls': [],
+        'debug_calls': [],
         'scan_debug': [],
     }
     for k, v in defaults.items():
@@ -194,6 +194,7 @@ st.markdown("""
 .debug-log { background: #0d1117; border: 1px solid #30363d; padding: 10px; border-radius: 5px; font-family: monospace; font-size: 0.75rem; max-height: 200px; overflow-y: auto; }
 .error-box { background: #ff4b4b20; border: 2px solid #ff4b4b; color: #ff9999; padding: 15px; border-radius: 10px; margin: 10px 0; }
 .warning-box { background: #ffa50220; border: 2px solid #ffa502; color: #ffcc00; padding: 15px; border-radius: 10px; margin: 10px 0; }
+.info-box { background: #23863620; border: 2px solid #238636; color: #7ee787; padding: 15px; border-radius: 10px; margin: 10px 0; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -236,12 +237,10 @@ class RateLimiter:
         self.calls = [c for c in self.calls if now - c < self.window]
         return f"{len(self.calls)}/{self.max_calls}"
 
-# KORRIGIERT: Alpha Vantage Limit ist 25/Tag, nicht 500!
 class AlphaVantageManager:
     def __init__(self, keys):
         self.keys = [k for k in keys if k and len(k) > 10]
         self.current_index = 0
-        # KORRIGIERT: 25 Calls pro Tag, nicht 500!
         self.limiters = {i: {'calls_today': 0, 'calls_per_min': [], 'key': k, 'exhausted': False, 'limit_reached_message': None} 
                         for i, k in enumerate(self.keys)}
     def get_current_key(self):
@@ -265,9 +264,9 @@ class AlphaVantageManager:
         limiter = self.limiters[idx]
         now = time.time()
         limiter['calls_per_min'] = [c for c in limiter['calls_per_min'] if now - c < 60]
-        if len(limiter['calls_per_min']) >= 5:  # Max 5 pro Minute
+        if len(limiter['calls_per_min']) >= 5:
             return False
-        if limiter['calls_today'] >= 25:  # KORRIGIERT: 25 pro Tag!
+        if limiter['calls_today'] >= 25:  # 25 pro Tag!
             limiter['exhausted'] = True
             return False
         return True
@@ -282,7 +281,6 @@ class AlphaVantageManager:
             st.session_state['api_stats'] = stats
         return limiter['calls_today']
     def set_limit_message(self, key_index, message):
-        """Speichert die Limit-Meldung von Alpha Vantage"""
         self.limiters[key_index]['limit_reached_message'] = message
         self.limiters[key_index]['exhausted'] = True
     def get_status(self):
@@ -411,17 +409,19 @@ def _default_structure_result(df=None):
 
 
 def get_yahoo_news_fallback(symbol):
+    """Yahoo Finance News - Fallback wenn Finnhub nicht verfügbar"""
     try:
         ticker = yf.Ticker(symbol)
         news = ticker.news
         if news:
+            # Yahoo News zählt nicht als API-Call (kommt mit Ticker-Daten)
             return [{'headline': n.get('title'), 'url': n.get('link'), 'source': 'Yahoo', 'datetime': 0} for n in news[:5]]
     except Exception as e:
         logger.error(f"Yahoo News Fehler für {symbol}: {e}")
     return []
 
 def get_finnhub_news_smart(symbol):
-    """Finnhub News mit Debug-Logging"""
+    """Finnhub News - 60 Calls/Minute"""
     cache_key = f"fh_news_{symbol}"
     cached = news_cache.get(cache_key, 600)
     if cached:
@@ -431,22 +431,15 @@ def get_finnhub_news_smart(symbol):
             st.session_state['api_stats'] = stats
         return cached, True
     
-    # Prüfe ob Finnhub verfügbar ist
     if not FINNHUB_API_KEY or len(FINNHUB_API_KEY) < 10:
-        debug_log = st.session_state.get('debug_alpha_calls', [])
-        debug_log.append(f"{datetime.now().strftime('%H:%M:%S')} - {symbol}: KEIN FINNHUB KEY")
-        st.session_state['debug_alpha_calls'] = debug_log[-50:]
         return [], False
     
     if not finnhub_limiter.can_call():
-        debug_log = st.session_state.get('debug_alpha_calls', [])
-        debug_log.append(f"{datetime.now().strftime('%H:%M:%S')} - {symbol}: FINNHUB RATE LIMIT")
-        st.session_state['debug_alpha_calls'] = debug_log[-50:]
         return [], False
     
     try:
         end = int(time.time())
-        start = end - 3600*48  # 48 Stunden zurück
+        start = end - 3600*48
         url = "https://finnhub.io/api/v1/company-news"
         params = {
             'symbol': symbol,
@@ -454,10 +447,6 @@ def get_finnhub_news_smart(symbol):
             'to': datetime.fromtimestamp(end).strftime('%Y-%m-%d'),
             'token': FINNHUB_API_KEY
         }
-        
-        debug_log = st.session_state.get('debug_alpha_calls', [])
-        debug_log.append(f"{datetime.now().strftime('%H:%M:%S')} - {symbol}: Finnhub CALL")
-        st.session_state['debug_alpha_calls'] = debug_log[-50:]
         
         response = safe_requests_get(url, params)
         
@@ -474,31 +463,14 @@ def get_finnhub_news_smart(symbol):
                 data.sort(key=lambda x: x.get('datetime', 0), reverse=True)
                 result = data[:5]
                 news_cache.set(cache_key, result)
-                
-                debug_log = st.session_state.get('debug_alpha_calls', [])
-                debug_log.append(f"{datetime.now().strftime('%H:%M:%S')} - {symbol}: Finnhub ERFOLG ({len(result)} News)")
-                st.session_state['debug_alpha_calls'] = debug_log[-50:]
-                
                 return result, False
-            else:
-                debug_log = st.session_state.get('debug_alpha_calls', [])
-                debug_log.append(f"{datetime.now().strftime('%H:%M:%S')} - {symbol}: Finnhub ungültige Antwort: {str(data)[:100]}")
-                st.session_state['debug_alpha_calls'] = debug_log[-50:]
-                return [], False
-        else:
-            debug_log = st.session_state.get('debug_alpha_calls', [])
-            debug_log.append(f"{datetime.now().strftime('%H:%M:%S')} - {symbol}: Finnhub KEINE ANTWORT")
-            st.session_state['debug_alpha_calls'] = debug_log[-50:]
-            return [], False
+        return [], False
             
     except Exception as e:
-        debug_log = st.session_state.get('debug_alpha_calls', [])
-        debug_log.append(f"{datetime.now().strftime('%H:%M:%S')} - {symbol}: Finnhub ERROR - {str(e)[:50]}")
-        st.session_state['debug_alpha_calls'] = debug_log[-50:]
         return [], False
 
 def get_alpha_vantage_smart(symbol):
-    """Alpha Vantage mit korrektem 25/Tag Limit"""
+    """Alpha Vantage - nur 25/Tag! Sehr sparsam nutzen."""
     cache_key = f"av_fund_{symbol}"
     cached = fundamentals_cache.get(cache_key, 3600)
     if cached:
@@ -533,14 +505,9 @@ def get_alpha_vantage_smart(symbol):
                 if response:
                     data = response.json()
                     
-                    # Prüfe auf Limit-Meldung
                     if 'Note' in data or 'Information' in data:
                         message = data.get('Note', data.get('Information', ''))
-                        
-                        # Speichere die Limit-Meldung
                         alpha_manager.set_limit_message(alpha_manager.current_index, message)
-                        
-                        # Rotiere zum nächsten Key
                         alpha_manager.rotate_key()
                         attempts += 1
                         time.sleep(1)
@@ -580,14 +547,14 @@ def get_alpha_vantage_smart(symbol):
     return None, False
 
 def analyze_news_tiered(symbol, tier, prelim_score):
-    """News-Analyse mit Priorität auf Finnhub"""
+    """News-Analyse: Finnhub (API) > Yahoo (Fallback)"""
     keywords_tier1 = ['fda approval', 'fda approved', 'phase 3 success', 'merger', 'acquisition', 'buyout']
     keywords_tier2 = ['earnings beat', 'guidance raised', 'upgrade', 'partnership']
     news_items = []
     sources = []
     from_cache = False
 
-    # KORRIGIERT: Finnhub für alle Setups mit Score > 50 (nicht nur Tier <= 10)
+    # 1. Versuch: Finnhub (API-Call, 60/min)
     if prelim_score > 50:
         fh_news, cached = get_finnhub_news_smart(symbol)
         from_cache = cached
@@ -600,7 +567,7 @@ def analyze_news_tiered(symbol, tier, prelim_score):
                 elif any(k in title for k in keywords_tier2):
                     news_items.append({'title': item['headline'], 'url': item['url'], 'tier': 2, 'score': 25, 'source': 'FH'})
 
-    # Yahoo Fallback nur wenn keine Finnhub-News
+    # 2. Fallback: Yahoo Finance (kostenlos, mit Ticker-Daten)
     if not news_items:
         yh_news = get_yahoo_news_fallback(symbol)
         if yh_news:
@@ -617,7 +584,7 @@ def analyze_news_tiered(symbol, tier, prelim_score):
 
 # ============================== Analyse Hauptfunktion ==============================
 def analyze_smart(symbol, tier, total_tickers, market_ctx=None):
-    """Hauptanalyse mit detailliertem Debug"""
+    """Hauptanalyse mit Yahoo Finance als Basis"""
     debug_info = {
         'symbol': symbol,
         'tier': tier,
@@ -626,10 +593,16 @@ def analyze_smart(symbol, tier, total_tickers, market_ctx=None):
     }
     
     try:
-        # Hole Daten (täglich für bessere Verfügbarkeit)
+        # YAHOO FINANCE - Primäre Datenquelle (immer verfügbar!)
         try:
             ticker = yf.Ticker(symbol)
             df = ticker.history(period='3mo', interval='1d')
+            
+            # Zähle Yahoo Call
+            stats = st.session_state.get('api_stats', {})
+            stats['yahoo'] = stats.get('yahoo', 0) + 1
+            st.session_state['api_stats'] = stats
+            
         except Exception as e:
             debug_info['errors'].append(f"Yahoo Finance Fehler: {e}")
             _log_scan_debug(debug_info)
@@ -642,6 +615,7 @@ def analyze_smart(symbol, tier, total_tickers, market_ctx=None):
             return None
         
         debug_info['checks']['data_rows'] = len(df)
+        debug_info['checks']['source'] = 'Yahoo Finance'
         
         if len(df) < 20:
             debug_info['errors'].append(f"Zu wenig Daten: {len(df)} Zeilen")
@@ -687,7 +661,7 @@ def analyze_smart(symbol, tier, total_tickers, market_ctx=None):
         debug_info['checks']['structure_intact'] = structure.get('structure_intact', False)
         
         if not structure.get('structure_intact', False):
-            debug_info['errors'].append("Struktur nicht intakt (keine Higher Highs + Higher Lows)")
+            debug_info['errors'].append("Struktur nicht intakt")
             _log_scan_debug(debug_info)
             return None
             
@@ -727,18 +701,18 @@ def analyze_smart(symbol, tier, total_tickers, market_ctx=None):
             
         debug_info['checks']['preliminary_score'] = score
         
-        # News (Finnhub priorisiert)
+        # NEWS (Finnhub > Yahoo)
         news, sources, cached_news = analyze_news_tiered(symbol, tier, score)
         if news:
             score += news[0]['score']
-            debug_info['checks']['news_score'] = news[0]['score']
+            debug_info['checks']['news_source'] = news[0]['source']
             
-        # Alpha Vantage nur für Top-Setups (sparsam nutzen!)
+        # ALPHA VANTAGE - Nur für Top-Setups (25/Tag Limit!)
         fundamentals, fund_cached = None, False
-        if score > 60 and tier <= 10:  # Nur für beste 10 Aktien
+        if score > 60 and tier <= 5:  # Nur Top 5!
             fundamentals, fund_cached = get_alpha_vantage_smart(symbol)
             if fundamentals:
-                debug_info['checks']['fundamentals'] = True
+                debug_info['checks']['fundamentals'] = 'Alpha Vantage'
                 
         pe_ratio = None
         if fundamentals:
@@ -960,7 +934,7 @@ st.markdown(f"""
 """, unsafe_allow_html=True)
 
 st.title('🐂 Elite Bull Scanner Pro V5.5')
-st.caption(f"3-Key Alpha Rotation | {len(alpha_manager.keys)} Keys aktiv | Market Clock | Echtzeit ET")
+st.caption(f"Yahoo Finance + Finnhub + Alpha Vantage | Market Clock | Echtzeit ET")
 
 # Auto-Refresh
 if st.session_state.get('auto_refresh'):
@@ -972,126 +946,133 @@ if st.session_state.get('auto_refresh'):
 
 # Sidebar
 with st.sidebar:
-    st.header("📡 Smart API Status")
-    stats = st.session_state.get('api_stats', {'finnhub':0,'alpha_vantage':0,'cache_hits':0,'alpha_rotation_count':0})
-    fh_status = "🟢" if finnhub_limiter.can_call() else "🔴"
-    alpha_status_list = alpha_manager.get_status()
+    st.header("📡 API Status")
+    stats = st.session_state.get('api_stats', {'yahoo':0,'finnhub':0,'alpha_vantage':0,'cache_hits':0,'alpha_rotation_count':0})
     
-    # WARNUNG wenn Alpha Vantage Limits erreicht
+    # Yahoo Finance Status
+    yahoo_calls = stats.get('yahoo', 0)
+    st.markdown(f"""
+    <div class="info-box">
+    🟢 <b>Yahoo Finance</b><br>
+    Kursdaten: {yahoo_calls} Calls<br>
+    <small>Unbegrenzt kostenlos</small>
+    </div>
+    """, unsafe_allow_html=True)
+    
+    # Finnhub Status
+    fh_status = "🟢" if finnhub_limiter.can_call() else "🔴"
+    st.markdown(f"""
+    <div class="api-stat">
+        <div style="display:flex; justify-content:space-between;">
+            <span>Finnhub News</span>
+            <span>{fh_status} {finnhub_limiter.get_status()}/60 pro Minute</span>
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
+    
+    # Alpha Vantage Status
+    alpha_status_list = alpha_manager.get_status()
     all_alpha_exhausted = all(s['exhausted'] for s in alpha_status_list)
+    
     if all_alpha_exhausted:
         st.markdown("""
         <div class="error-box">
-        ⚠️ <b>ALLE ALPHA VANTAGE KEYS ERSCHÖPFT!</b><br>
-        Limit: 25 Calls/Tag pro Key<br>
-        Nutze Finnhub für News (60/min)
+        ⚠️ <b>Alpha Vantage erschöpft!</b><br>
+        Limit: 25/Tag pro Key<br>
+        Morgen wieder verfügbar
         </div>
         """, unsafe_allow_html=True)
     
-    st.markdown(f"""
-<div class="api-stat">
-    <div style="display:flex; justify-content:space-between;">
-        <span>Finnhub</span>
-        <span>{fh_status} {finnhub_limiter.get_status()}/min</span>
-    </div>
-</div>
-""", unsafe_allow_html=True)
-
-    st.markdown("<div style='margin:10px 0;'><b>Alpha Vantage Keys (25/Tag):</b></div>", unsafe_allow_html=True)
+    st.markdown("<div style='margin:10px 0;'><b>Alpha Vantage (25/Tag):</b></div>", unsafe_allow_html=True)
     for status in alpha_status_list:
         cls = "key-active" if status['active'] else "key-exhausted" if status['exhausted'] else ""
         indicator = "▶️" if status['active'] else "✅" if not status['exhausted'] else "❌"
-        limit_msg = ""
-        if status.get('limit_message'):
-            # Extrahiere die wichtige Info
-            if "25 requests" in status['limit_message']:
-                limit_msg = " (Limit: 25/Tag erreicht!)"
         st.markdown(f"""
-<div class="key-indicator {cls}">
-    {indicator} Key {status['index']+1}: {status['calls_today']}/25{limit_msg}
-</div>
-""", unsafe_allow_html=True)
+        <div class="key-indicator {cls}">
+            {indicator} Key {status['index']+1}: {status['calls_today']}/25
+        </div>
+        """, unsafe_allow_html=True)
 
     rotations = stats.get('alpha_rotation_count',0)
     cache_hits = stats.get('cache_hits',0)
     st.markdown(f'<div style="font-size:0.8rem;margin:5px 0;">🔄 Rotationen: {rotations}</div>', unsafe_allow_html=True)
-    st.markdown(f"""
-<div class="api-stat">
-    <div style="display:flex; justify-content:space-between;">
-        <span>Cache Hits</span>
-        <span>🟢 {cache_hits}</span>
-    </div>
-</div>
-""", unsafe_allow_html=True)
+    st.markdown(f'<div style="font-size:0.8rem;margin:5px 0;">📦 Cache Hits: {cache_hits}</div>', unsafe_allow_html=True)
 
-    # Alpha Vantage Debug
+    # API Tests
     st.divider()
-    st.header("🔍 API Debug")
+    st.header("🧪 API Tests")
     
-    current_key_idx = alpha_manager.current_index
-    current_key = alpha_manager.get_current_key()
-    
-    if current_key:
-        st.write(f"Aktiver Key: #{current_key_idx + 1}")
-        
-        # Finnhub Test
-        if st.button("🧪 Test Finnhub (TSLA)"):
-            with st.spinner("Teste Finnhub..."):
-                news, cached = get_finnhub_news_smart("TSLA")
-                if news:
-                    st.success(f"✅ Finnhub funktioniert! {len(news)} News erhalten")
-                    st.write("Erste News:", news[0].get('headline', 'N/A')[:50])
+    col1, col2 = st.columns(2)
+    with col1:
+        if st.button("Test Yahoo", use_container_width=True):
+            try:
+                ticker = yf.Ticker("AAPL")
+                data = ticker.history(period="5d")
+                if not data.empty:
+                    st.success(f"✅ Yahoo OK! {len(data)} Tage Daten")
+                    stats = st.session_state.get('api_stats', {})
+                    stats['yahoo'] = stats.get('yahoo', 0) + 1
+                    st.session_state['api_stats'] = stats
                 else:
-                    st.error("❌ Finnhub keine Daten")
-        
-        # Alpha Vantage Test (nur wenn nicht exhausted)
-        if not all_alpha_exhausted:
-            if st.button("🧪 Test Alpha Vantage (IBM)"):
-                with st.spinner("Teste Alpha Vantage..."):
-                    result, cached = get_alpha_vantage_smart("IBM")
-                    if result:
-                        st.success(f"✅ Alpha Vantage funktioniert!")
-                        st.json(result)
-                    else:
-                        st.error("❌ Alpha Vantage keine Daten")
-        else:
-            st.markdown("""
-            <div class="warning-box">
-            ⛔ Alpha Vantage Test nicht verfügbar<br>
-            Alle Keys sind erschöpft (25/Tag)
-            </div>
-            """, unsafe_allow_html=True)
-        
-        # Manuelle Abfragen
-        manual_symbol = st.text_input("Manuelle News-Abfrage:", placeholder="z.B. AAPL", key="manual_news").upper()
-        if st.button("🔍 News abrufen (Finnhub)") and manual_symbol:
-            with st.spinner(f"Rufe News für {manual_symbol}..."):
-                news, sources, cached = analyze_news_tiered(manual_symbol, 1, 100)  # Hoher Score für Force-Call
-                if news:
-                    st.success(f"✅ {len(news)} News für {manual_symbol} gefunden!")
-                    for n in news[:3]:
-                        st.write(f"• [{n['source']}] {n['title'][:60]}...")
-                else:
-                    st.warning(f"⚠️ Keine News für {manual_symbol}")
+                    st.error("❌ Keine Daten")
+            except Exception as e:
+                st.error(f"❌ Fehler: {e}")
     
-    with st.expander("📋 API Call Log (letzte 20)"):
-        debug_logs = st.session_state.get('debug_alpha_calls', [])
+    with col2:
+        if st.button("Test Finnhub", use_container_width=True):
+            news, cached = get_finnhub_news_smart("TSLA")
+            if news:
+                st.success(f"✅ Finnhub OK! {len(news)} News")
+            else:
+                st.error("❌ Keine News")
+    
+    # Manuelle Abfrage
+    st.divider()
+    st.header("🔍 Manuelle Abfrage")
+    manual_symbol = st.text_input("Symbol:", placeholder="z.B. NVDA", key="manual").upper()
+    
+    if st.button("📊 Analyse starten", use_container_width=True) and manual_symbol:
+        with st.spinner(f"Analysiere {manual_symbol}..."):
+            result = analyze_smart(manual_symbol, 1, 1)
+            if result:
+                st.success(f"✅ Setup gefunden für {manual_symbol}!")
+                st.json({
+                    'Symbol': result['symbol'],
+                    'Score': result['score'],
+                    'Price': result['price'],
+                    'Pullback': f"{result['pullback_pct']:.1%}",
+                    'R:R': f"{result['rr_ratio']:.1f}x",
+                    'APIs': result['api_sources'],
+                    'News': len(result['news']) if result['news'] else 0
+                })
+            else:
+                st.error(f"❌ Kein Setup für {manual_symbol}")
+                # Zeige Debug-Info
+                scan_debug = st.session_state.get('scan_debug', [])
+                if scan_debug:
+                    last = scan_debug[-1]
+                    st.write("Letzte Prüfung:", last.get('checks', {}))
+                    st.write("Fehler:", last.get('errors', []))
+    
+    # Logs
+    with st.expander("📋 API Call Log"):
+        debug_logs = st.session_state.get('debug_calls', [])
         if debug_logs:
-            log_text = "\n".join(reversed(debug_logs[-20:]))
-            st.markdown(f'<div class="debug-log">{log_text}</div>', unsafe_allow_html=True)
+            for log in reversed(debug_logs[-20:]):
+                st.text(log)
         else:
-            st.caption("Noch keine API-Calls")
+            st.caption("Noch keine Calls")
     
-    if st.button("🔄 Alle Stats zurücksetzen"):
-        st.session_state['api_stats'] = {'finnhub':0,'alpha_vantage':0,'cache_hits':0,'alpha_rotation_count':0}
-        st.session_state['debug_alpha_calls'] = []
+    if st.button("🔄 Stats zurücksetzen", use_container_width=True):
+        st.session_state['api_stats'] = {'yahoo':0,'finnhub':0,'alpha_vantage':0,'cache_hits':0,'alpha_rotation_count':0}
+        st.session_state['debug_calls'] = []
         st.session_state['scan_debug'] = []
         for i in alpha_manager.limiters:
             alpha_manager.limiters[i]['exhausted'] = False
             alpha_manager.limiters[i]['calls_today'] = 0
             alpha_manager.limiters[i]['calls_per_min'] = []
             alpha_manager.limiters[i]['limit_reached_message'] = None
-        st.success("Alle Stats zurückgesetzt!")
+        st.success("Zurückgesetzt!")
         st.rerun()
 
     st.divider()
@@ -1101,9 +1082,10 @@ with st.sidebar:
     if clock['is_open']:
         st.progress(clock['progress'])
         st.caption(f"{int(clock['progress']*100)}% des Handelstags")
+    
     st.divider()
     st.header("🔄 Auto Refresh")
-    auto_mode = st.toggle("Live-Modus aktivieren", value=st.session_state.get('auto_refresh', False))
+    auto_mode = st.toggle("Live-Modus", value=st.session_state.get('auto_refresh', False))
     if auto_mode != st.session_state.get('auto_refresh'):
         st.session_state['auto_refresh'] = auto_mode
         st.rerun()
@@ -1116,13 +1098,13 @@ with st.sidebar:
         for alert in reversed(alert_history[-5:]):
             time_ago = int((datetime.now() - alert['timestamp']).total_seconds() / 60)
             st.markdown(f"""
-<div class="alert-history-item">
-    <b>{alert['symbol']}</b> | {alert['setup_type']}<br>
-    <small>${alert['price']:.2f} | Score: {alert['score']} | vor {time_ago}min</small>
-</div>
-""", unsafe_allow_html=True)
+            <div class="alert-history-item">
+                <b>{alert['symbol']}</b> | {alert['setup_type']}<br>
+                <small>${alert['price']:.2f} | Score: {alert['score']} | vor {time_ago}min</small>
+            </div>
+            """, unsafe_allow_html=True)
     else:
-        st.caption("Keine Alerts heute")
+        st.caption("Keine Alerts")
 
     # Watchlist
     st.divider()
@@ -1156,22 +1138,21 @@ with st.sidebar:
                     time.sleep(1)
                     st.rerun()
     current_list = st.session_state['watchlist']
-    active_list = st.multiselect("Aktive Watchlist:", options=current_list, default=current_list)
+    active_list = st.multiselect("Aktive:", options=current_list, default=current_list)
     if len(active_list)!=len(current_list):
         st.session_state['watchlist'] = active_list
         st.rerun()
     st.metric("Anzahl", len(st.session_state['watchlist']))
 
-# Hauptbereich - WARNUNG über API Limits
-all_alpha_exhausted = all(s['exhausted'] for s in alpha_manager.get_status())
-if all_alpha_exhausted:
-    st.markdown("""
-    <div class="warning-box">
-    ⚠️ <b>WICHTIG:</b> Alle Alpha Vantage API-Keys haben ihr Tageslimit von 25 Requests erreicht!<br>
-    Der Scanner funktioniert weiterhin mit <b>Finnhub</b> für News (60 Calls/Minute) und Yahoo Finance für Kursdaten.<br>
-    Alpha Vantage wird morgen wieder verfügbar sein.
-    </div>
-    """, unsafe_allow_html=True)
+# Hauptbereich - Info über Datenquellen
+st.markdown("""
+<div class="info-box">
+📊 <b>Datenquellen:</b><br>
+🟢 <b>Yahoo Finance</b> = Kursdaten (immer verfügbar, unbegrenzt)<br>
+🟢 <b>Finnhub</b> = News (60 Calls/Minute)<br>
+🟡 <b>Alpha Vantage</b> = Fundamentale Daten (25/Tag - wird sparsam genutzt)
+</div>
+""", unsafe_allow_html=True)
 
 # Scan Button
 scan_triggered = False
@@ -1180,11 +1161,11 @@ if st.button('🚀 Smart Scan Starten', use_container_width=True):
 
 # Scan & Analyse
 if scan_triggered:
-    with st.spinner("🔍 Scanne..."):
+    with st.spinner("🔍 Scanne mit Yahoo Finance..."):
         market_ctx = get_market_context()
         
         if market_ctx.get('market_closed'):
-            st.warning("⚠️ Markt ist möglicherweise geschlossen (Feiertag/Wochenende). Daten können unvollständig sein.")
+            st.warning("⚠️ Markt ist möglicherweise geschlossen.")
         
         st.session_state['scan_debug'] = []
         
@@ -1236,11 +1217,11 @@ if scan_triggered:
                         logger.error(f"Fehler bei {sym}: {e}")
                         error_count += 1
                     progress.progress((idx+1)/len(scan_list))
-                    status_text.text(f"Analysiert: {sym} ({idx+1}/{len(scan_list)}) - OK:{success_count} Fehler:{error_count}")
+                    status_text.text(f"Yahoo: {sym} ({idx+1}/{len(scan_list)}) - OK:{success_count} Fehler:{error_count}")
         else:
             for i, (sym, _) in enumerate(scan_list):
                 tier = i+1
-                status_text.text(f"Tier {tier}/{len(scan_list)}: {sym}")
+                status_text.text(f"Yahoo: {sym} ({tier}/{len(scan_list)})")
                 res = analyze_smart(sym, tier, len(scan_list), market_ctx)
                 if res:
                     existing = [r for r in results if r['symbol']==sym]
@@ -1260,7 +1241,7 @@ if scan_triggered:
         scan_debug = st.session_state.get('scan_debug', [])
         rejected = [d for d in scan_debug if not d.get('success')]
         
-        st.info(f"📊 Scan abgeschlossen: {success_count} Setups gefunden, {error_count} abgelehnt")
+        st.info(f"📊 Scan abgeschlossen: {success_count} Setups gefunden, {error_count} abgelehnt (Yahoo Finance: {stats.get('yahoo', 0)} Calls)")
         
         if rejected:
             error_counts = {}
@@ -1325,18 +1306,18 @@ if results:
         for s in r.get('api_sources', []):
             api_summary[s]=api_summary.get(s,0)+1
     cache_count = sum(1 for r in results if r.get('from_cache'))
-    colA, colB, colC, colD=st.columns(4)
-    with colA:
+    
+    cols = st.columns(4)
+    with cols[0]:
         st.metric("Setups", len(results))
-    with colB:
-        st.metric("API Calls", f"FH:{stats.get('finnhub',0)} AV:{stats.get('alpha_vantage',0)}")
-    with colC:
-        st.metric("Cache Hits", stats.get('cache_hits',0))
-    with colD:
-        st.metric("Rotationen", stats.get('alpha_rotation_count',0))
-    alpha_status = [s for s in alpha_manager.get_status()]
-    alpha_detail = ", ".join([f"K{i+1}:{s['calls_today']}" for i, s in enumerate(alpha_status)])
-    st.success(f"✅ APIs: {api_summary} | Cache: {cache_count} | Alpha: {alpha_detail}")
+    with cols[1]:
+        st.metric("Yahoo Calls", stats.get('yahoo', 0))
+    with cols[2]:
+        st.metric("Finnhub", stats.get('finnhub', 0))
+    with cols[3]:
+        st.metric("Alpha Vantage", stats.get('alpha_vantage', 0))
+    
+    st.success(f"✅ APIs in Ergebnissen: {api_summary} | Cache: {cache_count}")
 
     st.divider()
     def render_results_grid(results):
@@ -1348,45 +1329,33 @@ if results:
     render_results_grid(results)
 
     with st.expander("📡 API Details"):
+        st.write(f"**Yahoo Finance:** {stats.get('yahoo', 0)} Calls (unbegrenzt)")
         st.write(f"**Finnhub:** {finnhub_limiter.get_status()}/60 pro Minute")
-        st.write("**Alpha Keys (25/Tag):**")
-        for s in alpha_manager.get_status():
-            active_mark = "▶️" if s['active'] else ""
-            exhausted_mark = "❌ Exhausted" if s['exhausted'] else "✅ OK"
-            st.write(f"  {active_mark} Key {s['index']+1}: {s['calls_today']}/25 {exhausted_mark}")
+        st.write(f"**Alpha Vantage:** {stats.get('alpha_vantage', 0)}/25 pro Tag")
         
         ctx = get_market_context()
         st.write(f"**Marktkontext:** {'Risk-Off' if ctx.get('risk_off') else 'Risk-On'}")
         
         st.write("---")
-        st.write("**API Call Log:**")
-        debug_logs = st.session_state.get('debug_alpha_calls', [])
-        if debug_logs:
-            for log in reversed(debug_logs[-10:]):
-                st.text(log)
-        
-        st.write("---")
-        st.write("**Alert Status:**")
+        st.write("**Letzte Alerts:**")
         for symbol, alert in list(st.session_state.get('sent_alerts', {}).items())[:5]:
             ago = int((datetime.now() - alert['timestamp']).total_seconds() / 60)
-            st.write(f"  • {symbol}: {alert['setup_type']} vor {ago}min")
+            st.write(f"  • {symbol}: {alert['setup_type']} vor {ago}min @ ${alert['price']:.2f}")
 
 elif scan_triggered:
     scan_debug = st.session_state.get('scan_debug', [])
     if scan_debug:
         with st.expander("🔍 Scan Debug-Details", expanded=True):
-            st.warning("Keine Setups gefunden. Zeige Debug-Informationen:")
+            st.warning("Keine Setups gefunden.")
             rejected_samples = [d for d in scan_debug if not d.get('success')][:10]
             for item in rejected_samples:
                 with st.container():
                     cols = st.columns([1, 3])
                     with cols[0]:
-                        st.write(f"**{item['symbol']}** (T{item['tier']})")
+                        st.write(f"**{item['symbol']}**")
                     with cols[1]:
-                        if item.get('checks'):
-                            st.write("Checks:", item['checks'])
                         if item.get('errors'):
-                            st.error("Fehler: " + " | ".join(item['errors']))
+                            st.error(" | ".join(item['errors']))
                     st.divider()
 else:
-    st.info("👆 Klicke 'Smart Scan Starten' oder aktiviere 'Live-Modus' in der Sidebar.")
+    st.info("👆 Klicke 'Smart Scan Starten' um die Watchlist zu analysieren!")
