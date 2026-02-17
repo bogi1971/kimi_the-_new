@@ -930,12 +930,13 @@ if results:
         for symbol, alert in list(st.session_state.get('sent_alerts', {}).items())[:5]:
             ago = int((datetime.now() - alert['timestamp']).total_seconds() / 60)
             st.write(f"  • {symbol}: {alert['setup_type']} vor {ago}min @ ${alert['price']:.2f}")
-else:
 alerts = st.session_state.get('sent_alerts', {})
 if alerts:
+    # Code um Alerts anzuzeigen
     st.write("**Letzte Alerts:**")
     for symbol, alert in list(alerts.items())[:5]:
         ago = int((datetime.now() - alert['timestamp']).total_seconds() / 60)
         st.write(f"  • {symbol}: {alert['setup_type']} vor {ago}min @ ${alert['price']:.2f}")
 else:
+    # Dieser Block ist eingerückt
     st.info("👆 Klicke 'Smart Scan Starten' um die Watchlist zu analysieren!")
