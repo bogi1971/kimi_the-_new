@@ -31,10 +31,8 @@ def get_market_clock():
     market_open = now.replace(hour=9, minute=30, second=0, microsecond=0)
     market_close = now.replace(hour=16, minute=0, second=0, microsecond=0)
     pre_market = now.replace(hour=4, minute=0, second=0, microsecond=0)
-    after_hours = now.replace(hour=20, minute=0, second=0, microsecond=0)
-
     
-# Feiertage 2026
+    # Feiertage 2026
     holidays_2026 = [(1, 1), (1, 19), (2, 16), (4, 3), (5, 25), (6, 19), (7, 3), (9, 7), (11, 26), (12, 25)]
     is_holiday = (now.month, now.day) in holidays_2026
 
@@ -103,18 +101,18 @@ def get_market_context():
 st.set_page_config(layout="wide", page_title="Elite Bull Scanner Pro V5.5", page_icon="🐂")
 MIN_PULLBACK_PERCENT = 0.10
 MAX_PULLBACK_PERCENT = 0.25
-AUTO_REFRESH_INTERVAL = 1800
+AUTO_REFRESH_INTERVAL = 1800  # 30 Minuten
 MAX_WORKERS = 4
 ALERT_COOLDOWN_MINUTES = 60
 
-# API KEYS
-TELEGRAM_BOT_TOKEN = "8317204351:AAHRu-mYYU0_NRIxNGEQ5voneIQaDKeQuF8"
-TELEGRAM_CHAT_ID = "5338135874"
-FINNHUB_API_KEY = "d652vnpr01qqbln5m9cgd652vnpr01qqbln5m9d0"
+# API KEYS (hier nur Platzhalter, besser in secrets.toml)
+TELEGRAM_BOT_TOKEN = "YOUR_TELEGRAM_BOT_TOKEN"
+TELEGRAM_CHAT_ID = "YOUR_TELEGRAM_CHAT_ID"
+FINNHUB_API_KEY = "YOUR_FINNHUB_API_KEY"
 ALPHA_VANTAGE_KEYS = [
-    "N6PM9UCXL55JZTN9",
-    "03d0c05583534ec8a42a9f470b4f5451",
-    "a2dd09107d62438c8546c31d36b33458"
+    "YOUR_ALPHA_VANTAGE_KEY1",
+    "YOUR_ALPHA_VANTAGE_KEY2",
+    "YOUR_ALPHA_VANTAGE_KEY3"
 ]
 
 DEFAULT_WATCHLIST = sorted(list(set([
@@ -293,8 +291,7 @@ alpha_manager = AlphaVantageManager(ALPHA_VANTAGE_KEYS)
 # KORRIGIERT: Robuste analyze_structure mit vollständiger Fehlerprüfung
 def analyze_structure(df, symbol=None):
     """Swing Highs / Lows Analyse - mit robuster Fehlerbehandlung für Feiertage"""
-    
-    # KORRIGIERT: Prüfe ob df gültig ist
+    # Prüfe ob df gültig ist
     if df is None:
         logger.debug(f"{symbol}: DataFrame ist None in analyze_structure")
         return _default_structure_result()
@@ -307,19 +304,19 @@ def analyze_structure(df, symbol=None):
         logger.debug(f"{symbol}: Leerer DataFrame in analyze_structure")
         return _default_structure_result()
     
-    # KORRIGIERT: Prüfe ob benötigte Spalten existieren
+    # Prüfe ob benötigte Spalten existieren
     required_cols = ['High', 'Low', 'Close']
     for col in required_cols:
         if col not in df.columns:
             logger.debug(f"{symbol}: Spalte {col} fehlt in DataFrame")
             return _default_structure_result()
     
-    # KORRIGIERT: Prüfe ob genügend Daten vorhanden sind
+    # Prüfe ob genügend Daten vorhanden sind
     if len(df) < 10:
         logger.debug(f"{symbol}: Zu wenig Daten in analyze_structure: {len(df)} Zeilen")
         return _default_structure_result()
     
-    # KORRIGIERT: Entferne NaN Werte
+    # Entferne NaN Werte
     df_clean = df[['High', 'Low', 'Close']].dropna()
     if len(df_clean) < 10:
         logger.debug(f"{symbol}: Zu wenig gültige Daten nach NaN-Entfernung")
@@ -333,55 +330,41 @@ def analyze_structure(df, symbol=None):
             return cached
     
     try:
-        # KORRIGIERT: Sichere Extraktion der Werte
+        # Extrahiere Werte
         highs = df_clean['High'].values
         lows = df_clean['Low'].values
         
-        # KORRIGIERT: Prüfe ob Arrays gültig sind
+        # Prüfe Array Gültigkeit
         if highs is None or lows is None or len(highs) == 0 or len(lows) == 0:
             logger.debug(f"{symbol}: Leere Arrays nach .values")
             return _default_structure_result(df_clean)
         
-        # KORRIGIERT: Sichere Berechnung der Swing-Punkte
+        # Swing Highs / Lows ermitteln
         swing_highs = []
         swing_lows = []
-        
-        # Wir brauchen mindestens 5 Punkte für die Berechnung (2 links, 1 Mitte, 2 rechts)
         for i in range(2, len(highs)-2):
             try:
-                # KORRIGIERT: Prüfe auf NaN/Inf vor dem Vergleich
-                if not (np.isfinite(highs[i]) and np.isfinite(highs[i-1]) and np.isfinite(highs[i-2]) 
-                       and np.isfinite(highs[i+1]) and np.isfinite(highs[i+2])):
+                if not (np.isfinite(highs[i]) and np.isfinite(highs[i-1]) and np.isfinite(highs[i-2]) and np.isfinite(highs[i+1]) and np.isfinite(highs[i+2])):
                     continue
-                    
-                if (highs[i] > highs[i-1] and highs[i] > highs[i-2] and 
-                    highs[i] > highs[i+1] and highs[i] > highs[i+2]):
+                if (highs[i] > highs[i-1] and highs[i] > highs[i-2] and highs[i] > highs[i+1] and highs[i] > highs[i+2]):
                     swing_highs.append((i, float(highs[i])))
-                    
-                if not (np.isfinite(lows[i]) and np.isfinite(lows[i-1]) and np.isfinite(lows[i-2])
-                       and np.isfinite(lows[i+1]) and np.isfinite(lows[i+2])):
+                if not (np.isfinite(lows[i]) and np.isfinite(lows[i-1]) and np.isfinite(lows[i-2]) and np.isfinite(lows[i+1]) and np.isfinite(lows[i+2])):
                     continue
-                    
-                if (lows[i] < lows[i-1] and lows[i] < lows[i-2] and 
-                    lows[i] < lows[i+1] and lows[i] < lows[i+2]):
+                if (lows[i] < lows[i-1] and lows[i] < lows[i-2] and lows[i] < lows[i+1] and lows[i] < lows[i+2]):
                     swing_lows.append((i, float(lows[i])))
-            except Exception as e:
-                # Ignoriere einzelne Fehler bei der Berechnung
+            except:
                 continue
         
-        # KORRIGIERT: Berechne Ergebnis mit Fallbacks
+        # Ergebnis berechnen
         if len(swing_highs) >= 2 and len(swing_lows) >= 2:
             try:
                 hh = swing_highs[-1][1] > swing_highs[-2][1]
                 hl = swing_lows[-1][1] > swing_lows[-2][1]
-                
-                # Trend-Steigung berechnen
+                # Trend-Slope berechnen
                 slope = 0.0
                 if len(swing_highs) >= 3:
                     x = [float(swing_highs[-3][0]), float(swing_highs[-2][0]), float(swing_highs[-1][0])]
                     y = [float(swing_highs[-3][1]), float(swing_highs[-2][1]), float(swing_highs[-1][1])]
-                    
-                    # KORRIGIERT: Sichere Steigungsberechnung
                     if all(np.isfinite(val) for val in x + y):
                         n = len(x)
                         x_mean = sum(x) / n
@@ -390,7 +373,6 @@ def analyze_structure(df, symbol=None):
                         denominator = sum((x[i] - x_mean) ** 2 for i in range(n))
                         if denominator != 0 and np.isfinite(denominator):
                             slope = numerator / denominator
-                
                 result = {
                     'higher_highs': bool(hh),
                     'higher_lows': bool(hl),
@@ -399,39 +381,30 @@ def analyze_structure(df, symbol=None):
                     'last_swing_low': float(swing_lows[-1][1]),
                     'last_swing_high': float(swing_highs[-1][1])
                 }
-            except Exception as e:
-                logger.debug(f"{symbol}: Fehler bei Swing-Berechnung: {e}")
+            except:
                 result = _default_structure_result(df_clean)
         else:
             result = _default_structure_result(df_clean)
-        
-        # Cache das Ergebnis
+        # Cache Ergebnis
         if symbol:
             structure_cache.set(cache_key, result)
-            
         return result
-        
-    except Exception as e:
-        logger.error(f"Unerwarteter Fehler in analyze_structure für {symbol}: {e}")
+    except:
+        logger.error(f"Unerwarteter Fehler in analyze_structure für {symbol}")
         return _default_structure_result(df_clean if 'df_clean' in locals() else None)
 
-
 def _default_structure_result(df=None):
-    """Hilfsfunktion für Standard-Ergebnis bei Fehlern"""
+    """Standard-Ergebnis bei Fehlern"""
     if df is not None and not df.empty and 'Low' in df.columns and 'High' in df.columns:
         try:
-            # KORRIGIERT: Sichere Berechnung der Fallback-Werte
             low_vals = df['Low'].dropna()
             high_vals = df['High'].dropna()
-            
             last_low = float(low_vals.tail(5).min()) if len(low_vals) > 0 else 0.0
             last_high = float(high_vals.tail(20).max()) if len(high_vals) > 0 else 0.0
-            
             if not np.isfinite(last_low):
                 last_low = 0.0
             if not np.isfinite(last_high):
                 last_high = 0.0
-                
             return {
                 'structure_intact': False,
                 'higher_highs': False,
@@ -442,7 +415,6 @@ def _default_structure_result(df=None):
             }
         except:
             pass
-    
     return {
         'structure_intact': False,
         'higher_highs': False,
@@ -452,15 +424,14 @@ def _default_structure_result(df=None):
         'last_swing_high': 0.0
     }
 
-
 def get_yahoo_news_fallback(symbol):
     try:
         ticker = yf.Ticker(symbol)
         news = ticker.news
         if news:
-            return [{'headline': n.get('title'), 'url': n.get('link'), 'source': 'Yahoo', 'datetime': 0} for n in news[:5]]
-    except Exception as e:
-        logger.error(f"Yahoo News Fehler für {symbol}: {e}")
+            return [{'title': n.get('title'), 'url': n.get('link'), 'source': 'Yahoo', 'datetime': 0} for n in news[:5]]
+    except:
+        pass
     return []
 
 def get_finnhub_news_smart(symbol):
@@ -469,16 +440,16 @@ def get_finnhub_news_smart(symbol):
     if cached:
         stats = st.session_state.get('api_stats', {})
         if isinstance(stats, dict):
-            stats['cache_hits'] = stats.get('cache_hits', 0)+1
+            stats['cache_hits'] = stats.get('cache_hits', 0) + 1
             st.session_state['api_stats'] = stats
         return cached, True
     if not finnhub_limiter.can_call():
         return [], False
-    if not FINNHUB_API_KEY or len(FINNHUB_API_KEY)<10:
+    if not FINNHUB_API_KEY or len(FINNHUB_API_KEY) < 10:
         return [], False
     try:
         end = int(time.time())
-        start = end - 3600*48
+        start = end - 3600 * 48
         url = "https://finnhub.io/api/v1/company-news"
         params = {
             'symbol': symbol,
@@ -491,16 +462,16 @@ def get_finnhub_news_smart(symbol):
             finnhub_limiter.record_call()
             stats = st.session_state.get('api_stats', {})
             if isinstance(stats, dict):
-                stats['finnhub'] = stats.get('finnhub',0)+1
+                stats['finnhub'] = stats.get('finnhub', 0) + 1
                 st.session_state['api_stats'] = stats
             data = response.json()
             if isinstance(data, list):
-                data.sort(key=lambda x:x.get('datetime',0), reverse=True)
+                data.sort(key=lambda x: x.get('datetime', 0), reverse=True)
                 result = data[:5]
                 news_cache.set(cache_key, result)
                 return result, False
-    except Exception as e:
-        logger.error(f"Finnhub News Fehler: {e}")
+    except:
+        pass
     return [], False
 
 def get_alpha_vantage_smart(symbol):
@@ -509,34 +480,34 @@ def get_alpha_vantage_smart(symbol):
     if cached:
         stats = st.session_state.get('api_stats', {})
         if isinstance(stats, dict):
-            stats['cache_hits'] = stats.get('cache_hits',0)+1
+            stats['cache_hits'] = stats.get('cache_hits', 0) + 1
             st.session_state['api_stats'] = stats
         return cached, True
     if not alpha_manager.keys:
         return None, False
     attempts = 0
     max_attempts = len(alpha_manager.keys)
-    while attempts<max_attempts:
+    while attempts < max_attempts:
         if alpha_manager.can_call():
             current_key = alpha_manager.get_current_key()
             url = "https://www.alphavantage.co/query"
-            params = {'function':'OVERVIEW','symbol':symbol,'apikey':current_key}
+            params = {'function': 'OVERVIEW', 'symbol': symbol, 'apikey': current_key}
             response = safe_requests_get(url, params)
             if response:
                 data = response.json()
                 if 'Note' in data or 'Information' in data:
                     alpha_manager.limiters[alpha_manager.current_index]['exhausted'] = True
                     alpha_manager.rotate_key()
-                    attempts +=1
+                    attempts += 1
                     time.sleep(0.5)
                     continue
                 if 'Symbol' in data:
                     result = {
-                        'pe_ratio': float(data.get('PERatio',0)) if data.get('PERatio') else None,
-                        'eps': float(data.get('EPS',0)) if data.get('EPS') else None,
-                        'sector': data.get('Sector',''),
-                        'industry': data.get('Industry',''),
-                        'market_cap': int(data.get('MarketCapitalization',0)) if data.get('MarketCapitalization') else 0
+                        'pe_ratio': float(data.get('PERatio', 0)) if data.get('PERatio') else None,
+                        'eps': float(data.get('EPS', 0)) if data.get('EPS') else None,
+                        'sector': data.get('Sector', ''),
+                        'industry': data.get('Industry', ''),
+                        'market_cap': int(data.get('MarketCapitalization', 0)) if data.get('MarketCapitalization') else 0
                     }
                     fundamentals_cache.set(cache_key, result)
                     return result, False
@@ -546,7 +517,7 @@ def get_alpha_vantage_smart(symbol):
                 continue
         else:
             alpha_manager.rotate_key()
-            attempts +=1
+            attempts += 1
     return None, False
 
 def analyze_news_tiered(symbol, tier, prelim_score):
@@ -588,7 +559,7 @@ def analyze_smart(symbol, tier, total_tickers, market_ctx=None):
         ticker = yf.Ticker(symbol)
         df = ticker.history(period='3mo', interval='1h')
         
-        # KORRIGIERT: Bessere Prüfung für Feiertage (leere/ungültige Daten)
+        # Bessere Prüfung für Feiertage (leere/ungültige Daten)
         if df is None or df.empty:
             logger.debug(f"{symbol}: Keine Daten verfügbar (Feiertag/Markt geschlossen?)")
             return None
@@ -602,7 +573,7 @@ def analyze_smart(symbol, tier, total_tickers, market_ctx=None):
             logger.debug(f"{symbol}: Keine gültigen Preisdaten")
             return None
             
-        # KORRIGIERT: Entferne NaN Zeilen für Berechnungen
+        # Entferne NaN Zeilen
         df_clean = df.dropna()
         if len(df_clean) < 30:
             logger.debug(f"{symbol}: Zu wenig gültige Daten nach NaN-Entfernung")
@@ -634,10 +605,10 @@ def analyze_smart(symbol, tier, total_tickers, market_ctx=None):
         if pullback_pct < MIN_PULLBACK_PERCENT or pullback_pct > MAX_PULLBACK_PERCENT:
             return None
             
-        # KORRIGIERT: analyze_structure jetzt robuster
+        # analyze_structure jetzt robuster
         structure = analyze_structure(df_clean, symbol)
         
-        # KORRIGIERT: Prüfe ob structure gültig ist
+        # Prüfe ob structure gültig ist
         if not structure or not isinstance(structure, dict):
             logger.debug(f"{symbol}: Ungültiges Structure-Ergebnis")
             return None
@@ -662,17 +633,17 @@ def analyze_smart(symbol, tier, total_tickers, market_ctx=None):
         # Volatilität
         avg_vol = df_clean['Volume'].tail(20).mean()
         current_vol = df_clean['Volume'].iloc[-1]
-        rvol = current_vol/avg_vol if avg_vol>0 else 1.0
+        rvol = current_vol / avg_vol if avg_vol > 0 else 1.0
         if not np.isfinite(rvol):
             rvol = 1.0
             
-        if rvol>2:
+        if rvol > 2:
             score += 20
-        elif rvol>1.5:
+        elif rvol > 1.5:
             score += 10
             
         # Unterstützung
-        support_dist = (current_price - last_swing_low)/current_price if current_price > 0 else 1.0
+        support_dist = (current_price - last_swing_low) / current_price if current_price > 0 else 1.0
         if not np.isfinite(support_dist):
             support_dist = 1.0
             
@@ -707,11 +678,11 @@ def analyze_smart(symbol, tier, total_tickers, market_ctx=None):
             atr = float(atr_series.mean())
             if not np.isfinite(atr) or atr <= 0:
                 atr = current_price * 0.02
-        except Exception as e:
+        except:
             atr = current_price * 0.02
             
         technical_stop = last_swing_low * 0.985
-        atr_stop = current_price - (2*atr)
+        atr_stop = current_price - (2 * atr)
         stop_loss = max(technical_stop, atr_stop)
         
         if not np.isfinite(stop_loss) or stop_loss <= 0 or stop_loss >= current_price:
@@ -730,7 +701,7 @@ def analyze_smart(symbol, tier, total_tickers, market_ctx=None):
             
         risk = current_price - stop_loss
         reward = target - current_price
-        rr_ratio = reward/risk if risk > 0 else 0
+        rr_ratio = reward / risk if risk > 0 else 0
         
         if not np.isfinite(rr_ratio) or rr_ratio < 1.5:
             return None
@@ -752,7 +723,7 @@ def analyze_smart(symbol, tier, total_tickers, market_ctx=None):
         if news:
             reasons.append(f"📰 {news[0]['source']}")
         if pe_ratio is not None and np.isfinite(pe_ratio):
-            reasons.append(f"{'💰' if pe_ratio<15 else '📊'} PE {pe_ratio:.1f}")
+            reasons.append(f"{'💰' if pe_ratio < 15 else '📊'} PE {pe_ratio:.1f}")
             
         return {
             'symbol': symbol,
@@ -771,9 +742,7 @@ def analyze_smart(symbol, tier, total_tickers, market_ctx=None):
             'api_sources': list(set([s for s in sources])),
             'from_cache': cached_news or fund_cached
         }
-        
     except Exception as e:
-        # KORRIGIERT: Weniger alarmierendes Logging bei Feiertagen
         error_msg = str(e).lower()
         if any(x in error_msg for x in ['none', 'empty', 'nan', 'holiday', 'closed']):
             logger.debug(f"{symbol}: Analyse nicht möglich (Marktdaten unvollständig): {e}")
@@ -785,22 +754,16 @@ def analyze_smart(symbol, tier, total_tickers, market_ctx=None):
 def should_send_alert(symbol, current_price, current_score):
     sent_alerts = st.session_state.get('sent_alerts', {})
     now = datetime.now()
-    
     if symbol not in sent_alerts:
         return True
-    
     last_alert = sent_alerts[symbol]
     time_diff = (now - last_alert['timestamp']).total_seconds() / 60
-    
     if time_diff < ALERT_COOLDOWN_MINUTES:
         return False
-    
     price_change = abs(current_price - last_alert['price']) / last_alert['price']
     score_change = current_score - last_alert['score']
-    
     if price_change < 0.02 and score_change < 10:
         return False
-    
     return True
 
 def record_alert(symbol, price, score, setup_type):
@@ -819,14 +782,13 @@ def record_alert(symbol, price, score, setup_type):
     })
     st.session_state['alert_history'] = st.session_state['alert_history'][-20:]
 
-# ============================== Telegram Alarm ==============================
+# ============================== Telegram Alert ==============================
 def send_telegram_alert(symbol, price, pullback_pct, news_item, setup_type, pe_ratio=None, api_sources=None, tier=None):
-    if not TELEGRAM_BOT_TOKEN or len(TELEGRAM_BOT_TOKEN)<10:
+    if not TELEGRAM_BOT_TOKEN or len(TELEGRAM_BOT_TOKEN) < 10:
         return False
-    
-    news_title = news_item.get('title','')[:40] + '...' if news_item else 'Keine News'
-    news_url = news_item.get('url','') if news_item else f'https://finance.yahoo.com/quote/{symbol}'
-    emoji = "🟣" if setup_type=="CATALYST" else "🏆" if setup_type=="GOLD" else "🐂"
+    news_title = news_item.get('title', '')[:40] + '...' if news_item else 'Keine News'
+    news_url = news_item.get('url', '') if news_item else f'https://finance.yahoo.com/quote/{symbol}'
+    emoji = "🟣" if setup_type == "CATALYST" else "🏆" if setup_type == "GOLD" else "🐂"
     pe_info = f"\n📊 P/E: {pe_ratio:.1f}" if pe_ratio else ""
     api_info = f"\n📡 {','.join(api_sources)}" if api_sources else ""
     tier_info = f"\n🎯 Tier {tier}" if tier else ""
@@ -840,8 +802,8 @@ def send_telegram_alert(symbol, price, pullback_pct, news_item, setup_type, pe_r
     try:
         requests.post(url, data=payload, timeout=5).raise_for_status()
         return True
-    except Exception as e:
-        logger.error(f"Telegram Fehlschlag: {e}")
+    except:
+        logger.error(f"Telegram Fehlschlag bei {symbol}")
         return False
 
 # ============================== Karten HTML ==============================
@@ -925,13 +887,13 @@ if st.session_state.get('auto_refresh'):
     last = st.session_state.get('last_auto_refresh', 0)
     if time.time() - last >= AUTO_REFRESH_INTERVAL:
         st.session_state['last_auto_refresh'] = time.time()
-        st.session_state['refresh_count'] = st.session_state.get('refresh_count', 0) + 1
+        st.session_state['refresh_count'] += 1
         st.rerun()
 
 # Sidebar
 with st.sidebar:
     st.header("📡 Smart API Status")
-    stats = st.session_state.get('api_stats', {'finnhub':0,'alpha_vantage':0,'cache_hits':0,'alpha_rotation_count':0})
+    stats = st.session_state.get('api_stats', {'finnhub': 0, 'alpha_vantage': 0, 'cache_hits': 0, 'alpha_rotation_count': 0})
     fh_status = "🟢" if finnhub_limiter.can_call() else "🔴"
     alpha_status_list = alpha_manager.get_status()
     st.markdown(f"""
@@ -953,8 +915,8 @@ with st.sidebar:
 </div>
 """, unsafe_allow_html=True)
 
-    rotations = stats.get('alpha_rotation_count',0)
-    cache_hits = stats.get('cache_hits',0)
+    rotations = stats.get('alpha_rotation_count', 0)
+    cache_hits = stats.get('cache_hits', 0)
     st.markdown(f'<div class="rotation-badge">🔄 Rotationen: {rotations}</div>', unsafe_allow_html=True)
     st.markdown(f"""
 <div class="api-stat">
@@ -1028,7 +990,7 @@ with st.sidebar:
                     st.rerun()
     current_list = st.session_state['watchlist']
     active_list = st.multiselect("Aktive Watchlist:", options=current_list, default=current_list)
-    if len(active_list)!=len(current_list):
+    if len(active_list) != len(current_list):
         st.session_state['watchlist'] = active_list
         st.rerun()
     st.metric("Anzahl", len(st.session_state['watchlist']))
@@ -1036,21 +998,19 @@ with st.sidebar:
 # Scan Button
 scan_triggered = False
 if st.button('🚀 Smart Scan Starten'):
-    scan_triggered=True
+    scan_triggered = True
 
 # Scan & Analyse
 if scan_triggered:
     with st.spinner("🔍 Scanne..."):
         market_ctx = get_market_context()
-        
         if market_ctx.get('market_closed'):
             st.warning("⚠️ Markt ist möglicherweise geschlossen (Feiertag/Wochenende). Daten können unvollständig sein.")
-        
         gainers = []
         try:
-            headers={'User-Agent':'Mozilla/5.0'}
+            headers = {'User-Agent': 'Mozilla/5.0'}
             r = requests.get('https://finance.yahoo.com/gainers', headers=headers, timeout=10)
-            if r.status_code==200:
+            if r.status_code == 200:
                 try:
                     tables = pd.read_html(StringIO(r.text))
                     if tables:
@@ -1059,96 +1019,95 @@ if scan_triggered:
                     pass
         except:
             pass
+
         scan_list = [(s, '📋') for s in st.session_state['watchlist']]
         seen = set(st.session_state['watchlist'])
         for g in gainers:
-            if g not in seen and isinstance(g,str):
+            if g not in seen and isinstance(g, str):
                 scan_list.append((g, '🌍'))
                 seen.add(g)
+
         results = []
         progress = st.progress(0)
         status_text = st.empty()
-        use_parallel = len(scan_list)>20
-        
+        use_parallel = len(scan_list) > 20
+
         error_count = 0
         success_count = 0
-        
+
         if use_parallel:
             with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
-                futures = {executor.submit(analyze_smart, sym, i+1, len(scan_list), market_ctx): (sym, i) for i, (sym,_) in enumerate(scan_list)}
+                futures = {executor.submit(analyze_smart, sym, i + 1, len(scan_list), market_ctx): (sym, i) for i, (sym, _) in enumerate(scan_list)}
                 for future in as_completed(futures):
                     sym, idx = futures[future]
                     try:
                         res = future.result()
                         if res:
-                            existing = [r for r in results if r['symbol']==sym]
-                            if not existing or res['score']>existing[0]['score']:
-                                results = [r for r in results if r['symbol']!=sym]
+                            existing = [r for r in results if r['symbol'] == sym]
+                            if not existing or res['score'] > existing[0]['score']:
+                                results = [r for r in results if r['symbol'] != sym]
                                 results.append(res)
                                 success_count += 1
                         else:
                             error_count += 1
-                    except Exception as e:
-                        logger.error(f"Fehler bei {sym}: {e}")
+                    except:
+                        logger.error(f"Fehler bei {sym}")
                         error_count += 1
-                    progress.progress((idx+1)/len(scan_list))
-                    status_text.text(f"Analysiert: {sym} ({idx+1}/{len(scan_list)}) - OK:{success_count} Fehler:{error_count}")
+                    progress.progress((idx + 1) / len(scan_list))
+                    status_text.text(f"Analysiert: {sym} ({idx + 1}/{len(scan_list)}) - OK:{success_count} Fehler:{error_count}")
         else:
             for i, (sym, _) in enumerate(scan_list):
-                tier = i+1
+                tier = i + 1
                 status_text.text(f"Tier {tier}/{len(scan_list)}: {sym}")
                 res = analyze_smart(sym, tier, len(scan_list), market_ctx)
                 if res:
-                    existing = [r for r in results if r['symbol']==sym]
-                    if not existing or res['score']>existing[0]['score']:
-                        results = [r for r in results if r['symbol']!=sym]
+                    existing = [r for r in results if r['symbol'] == sym]
+                    if not existing or res['score'] > existing[0]['score']:
+                        results = [r for r in results if r['symbol'] != sym]
                         results.append(res)
                         success_count += 1
                 else:
                     error_count += 1
-                progress.progress((i+1)/len(scan_list))
-                if i%10==0:
+                progress.progress((i + 1) / len(scan_list))
+                if i % 10 == 0:
                     time.sleep(0.5)
-                    
+
         progress.empty()
         status_text.empty()
-        
+
         if error_count > 0 and clock.get('is_holiday'):
             st.info(f"📊 Scan abgeschlossen: {success_count} Setups gefunden. {error_count} Tickers hatten keine Daten (Feiertag).")
         elif error_count > 0:
             st.info(f"📊 Scan abgeschlossen: {success_count} Setups gefunden, {error_count} Fehler")
-        
-        st.session_state['scan_results']=results
-        st.session_state['last_scan_time']=datetime.now()
 
-        # Alert-Logik
+        st.session_state['scan_results'] = results
+        st.session_state['last_scan_time'] = datetime.now()
+
+        # Alerts
         alerts_sent_this_scan = 0
         for item in results:
             if item['score'] > 75:
                 symbol = item['symbol']
                 price = item['price']
                 score = item['score']
-                
                 if should_send_alert(symbol, price, score):
-                    setup_type = "CATALYST" if (item.get('news') and item['news'][0]['tier']==1) else "GOLD"
-                    
+                    setup_type = "CATALYST" if (item.get('news') and item['news'][0]['tier'] == 1) else "GOLD"
                     success = send_telegram_alert(
-                        symbol, price, item['pullback_pct'], 
-                        item['news'][0] if item.get('news') else None, 
-                        setup_type, item.get('pe_ratio'), 
+                        symbol, price, item['pullback_pct'],
+                        item['news'][0] if item.get('news') else None,
+                        setup_type, item.get('pe_ratio'),
                         item.get('api_sources'), item.get('tier')
                     )
-                    
                     if success:
                         record_alert(symbol, price, score, setup_type)
                         alerts_sent_this_scan += 1
                         if alerts_sent_this_scan <= 3:
                             st.toast(f"🚨 {setup_type} Alert: {symbol} @ ${price:.2f} (Score: {score})")
 
-# Ergebnisse Anzeige
+# Ergebnisse anzeigen
 results = st.session_state.get('scan_results', [])
 if results:
-    col1, col2 = st.columns([3,1])
+    col1, col2 = st.columns([3, 1])
     with col1:
         st.subheader(f"📊 Gefundene Setups: {len(results)}")
     with col2:
@@ -1156,21 +1115,21 @@ if results:
             count = st.session_state.get('refresh_count', 0)
             st.markdown(f'<div style="background:#1a1a2e;padding:10px;border-radius:8px;border-left:4px solid #00FF00;">🔴 LIVE #{count}</div>', unsafe_allow_html=True)
         else:
-            last_time=st.session_state.get('last_scan_time')
+            last_time = st.session_state.get('last_scan_time')
             if last_time:
                 st.caption(f"Letzter Scan: {last_time.strftime('%H:%M:%S')}")
-    
+
     sent_alerts = st.session_state.get('sent_alerts', {})
     active_alerts = len([a for a in sent_alerts.values() if (datetime.now() - a['timestamp']).total_seconds() / 3600 < 24])
     st.info(f"📱 Aktive Alerts (24h): {active_alerts} | In Cooldown: {len(sent_alerts) - active_alerts}")
-    
+
     stats = st.session_state.get('api_stats', {})
     api_summary = {}
     for r in results:
         for s in r.get('api_sources', []):
-            api_summary[s]=api_summary.get(s,0)+1
+            api_summary[s] = api_summary.get(s, 0) + 1
     cache_count = sum(1 for r in results if r.get('from_cache'))
-    colA, colB, colC, colD=st.columns(4)
+    colA, colB, colC, colD = st.columns(4)
     with colA:
         st.metric("Setups", len(results))
     with colB:
@@ -1188,8 +1147,9 @@ if results:
         results_sorted = sorted(results, key=lambda x: (x['score'], x['pullback_pct']), reverse=True)
         cols = st.columns(4)
         for i, r in enumerate(results_sorted[:16]):
-            with cols[i%4]:
+            with cols[i % 4]:
                 render_card(r, st.container())
+
     render_results_grid(results)
 
     with st.expander("📡 API Details"):
@@ -1202,7 +1162,6 @@ if results:
         st.write(f"**Rotationen:** {stats.get('alpha_rotation_count',0)}")
         ctx = get_market_context()
         st.write(f"**Marktkontext:** {'Risk-Off' if ctx.get('risk_off') else 'Risk-On'} (SPY: {ctx.get('spy_change',0):.2%}, VIX: {ctx.get('vix_level',0):.1f})")
-        
         st.write("---")
         st.write("**Alert Status:**")
         for symbol, alert in list(st.session_state.get('sent_alerts', {}).items())[:5]:
