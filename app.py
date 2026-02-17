@@ -33,7 +33,6 @@ def get_market_clock():
     pre_market = now.replace(hour=4, minute=0, second=0, microsecond=0)
     after_hours = now.replace(hour=20, minute=0, second=0, microsecond=0)
 
-    # Feiertage 2026
     holidays_2026 = [(1, 1), (1, 19), (2, 16), (4, 3), (5, 25), (6, 19), (7, 3), (9, 7), (11, 26), (12, 25)]
     is_holiday = (now.month, now.day) in holidays_2026
 
@@ -139,7 +138,8 @@ def init_session_state():
         'refresh_count': 0,
         'last_auto_refresh': 0,
         'alert_history': [],
-        'debug_alpha_calls': [],  # NEU: Debug-Log für Alpha Calls
+        'debug_alpha_calls': [],
+        'scan_debug': [],  # NEU: Debug-Info für Scan
     }
     for k, v in defaults.items():
         if k not in st.session_state:
@@ -192,6 +192,7 @@ st.markdown("""
     font-weight: bold;
 }
 .debug-log { background: #0d1117; border: 1px solid #30363d; padding: 10px; border-radius: 5px; font-family: monospace; font-size: 0.75rem; max-height: 200px; overflow-y: auto; }
+.error-log { background: #1a0f0f; border: 1px solid #ff4b4b; padding: 10px; border-radius: 5px; font-family: monospace; font-size: 0.75rem; max-height: 300px; overflow-y: auto; color: #ff9999; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -295,30 +296,24 @@ def analyze_structure(df, symbol=None):
     """Swing Highs / Lows Analyse - mit robuster Fehlerbehandlung für Feiertage"""
     
     if df is None:
-        logger.debug(f"{symbol}: DataFrame ist None in analyze_structure")
         return _default_structure_result()
         
     if not isinstance(df, pd.DataFrame):
-        logger.debug(f"{symbol}: Ungültiger Datentyp in analyze_structure: {type(df)}")
         return _default_structure_result()
         
     if df.empty:
-        logger.debug(f"{symbol}: Leerer DataFrame in analyze_structure")
         return _default_structure_result()
     
     required_cols = ['High', 'Low', 'Close']
     for col in required_cols:
         if col not in df.columns:
-            logger.debug(f"{symbol}: Spalte {col} fehlt in DataFrame")
             return _default_structure_result()
     
     if len(df) < 10:
-        logger.debug(f"{symbol}: Zu wenig Daten in analyze_structure: {len(df)} Zeilen")
         return _default_structure_result()
     
     df_clean = df[['High', 'Low', 'Close']].dropna()
     if len(df_clean) < 10:
-        logger.debug(f"{symbol}: Zu wenig gültige Daten nach NaN-Entfernung")
         return _default_structure_result()
     
     if symbol:
@@ -332,7 +327,6 @@ def analyze_structure(df, symbol=None):
         lows = df_clean['Low'].values
         
         if highs is None or lows is None or len(highs) == 0 or len(lows) == 0:
-            logger.debug(f"{symbol}: Leere Arrays nach .values")
             return _default_structure_result(df_clean)
         
         swing_highs = []
@@ -386,7 +380,6 @@ def analyze_structure(df, symbol=None):
                     'last_swing_high': float(swing_highs[-1][1])
                 }
             except Exception as e:
-                logger.debug(f"{symbol}: Fehler bei Swing-Berechnung: {e}")
                 result = _default_structure_result(df_clean)
         else:
             result = _default_structure_result(df_clean)
@@ -397,7 +390,6 @@ def analyze_structure(df, symbol=None):
         return result
         
     except Exception as e:
-        logger.error(f"Unerwarteter Fehler in analyze_structure für {symbol}: {e}")
         return _default_structure_result(df_clean if 'df_clean' in locals() else None)
 
 
@@ -487,7 +479,6 @@ def get_finnhub_news_smart(symbol):
         logger.error(f"Finnhub News Fehler: {e}")
     return [], False
 
-# KORRIGIERT: Verbesserte Alpha Vantage Funktion mit besserer Fehlerbehandlung
 def get_alpha_vantage_smart(symbol):
     """Verbesserte Alpha Vantage Abfrage mit besserer Fehlerbehandlung und Debug-Logging"""
     cache_key = f"av_fund_{symbol}"
@@ -497,7 +488,6 @@ def get_alpha_vantage_smart(symbol):
         if isinstance(stats, dict):
             stats['cache_hits'] = stats.get('cache_hits',0)+1
             st.session_state['api_stats'] = stats
-        # Debug-Log
         debug_log = st.session_state.get('debug_alpha_calls', [])
         debug_log.append(f"{datetime.now().strftime('%H:%M:%S')} - {symbol}: CACHE HIT")
         st.session_state['debug_alpha_calls'] = debug_log[-50:]
@@ -505,9 +495,6 @@ def get_alpha_vantage_smart(symbol):
     
     if not alpha_manager.keys:
         logger.warning("Keine Alpha Vantage Keys konfiguriert")
-        debug_log = st.session_state.get('debug_alpha_calls', [])
-        debug_log.append(f"{datetime.now().strftime('%H:%M:%S')} - {symbol}: KEINE KEYS")
-        st.session_state['debug_alpha_calls'] = debug_log[-50:]
         return None, False
     
     attempts = 0
@@ -517,7 +504,6 @@ def get_alpha_vantage_smart(symbol):
         if alpha_manager.can_call():
             current_key = alpha_manager.get_current_key()
             if not current_key:
-                logger.warning("Kein aktiver API-Key verfügbar")
                 break
                 
             url = "https://www.alphavantage.co/query"
@@ -528,7 +514,6 @@ def get_alpha_vantage_smart(symbol):
             }
             
             try:
-                # Debug-Log vor dem Call
                 debug_log = st.session_state.get('debug_alpha_calls', [])
                 debug_log.append(f"{datetime.now().strftime('%H:%M:%S')} - {symbol}: Versuch {attempts+1}, Key {alpha_manager.current_index+1}")
                 st.session_state['debug_alpha_calls'] = debug_log[-50:]
@@ -538,13 +523,7 @@ def get_alpha_vantage_smart(symbol):
                 if response:
                     data = response.json()
                     
-                    # Prüfe auf API-Limit oder Info-Meldung
                     if 'Note' in data:
-                        logger.warning(f"Alpha Vantage Limit erreicht für Key {alpha_manager.current_index + 1}: {data['Note'][:100]}")
-                        debug_log = st.session_state.get('debug_alpha_calls', [])
-                        debug_log.append(f"{datetime.now().strftime('%H:%M:%S')} - {symbol}: LIMIT erreicht (Key {alpha_manager.current_index+1})")
-                        st.session_state['debug_alpha_calls'] = debug_log[-50:]
-                        
                         alpha_manager.limiters[alpha_manager.current_index]['exhausted'] = True
                         alpha_manager.rotate_key()
                         attempts += 1
@@ -552,12 +531,6 @@ def get_alpha_vantage_smart(symbol):
                         continue
                     
                     if 'Information' in data:
-                        logger.warning(f"Alpha Vantage Info: {data['Information'][:100]}")
-                        debug_log = st.session_state.get('debug_alpha_calls', [])
-                        debug_log.append(f"{datetime.now().strftime('%H:%M:%S')} - {symbol}: INFO - {str(data['Information'])[:50]}")
-                        st.session_state['debug_alpha_calls'] = debug_log[-50:]
-                        
-                        # Bei "Invalid API call" nicht als exhausted markieren, sondern nächsten Key
                         if 'Invalid API call' in str(data.get('Information', '')):
                             alpha_manager.rotate_key()
                             attempts += 1
@@ -570,15 +543,9 @@ def get_alpha_vantage_smart(symbol):
                             time.sleep(1)
                             continue
                     
-                    # Prüfe auf Fehler
                     if 'Error Message' in data:
-                        logger.error(f"Alpha Vantage Fehler für {symbol}: {data['Error Message']}")
-                        debug_log = st.session_state.get('debug_alpha_calls', [])
-                        debug_log.append(f"{datetime.now().strftime('%H:%M:%S')} - {symbol}: ERROR - {data['Error Message'][:50]}")
-                        st.session_state['debug_alpha_calls'] = debug_log[-50:]
                         return None, False
                     
-                    # Erfolgreiche Antwort
                     if 'Symbol' in data and data['Symbol']:
                         result = {
                             'pe_ratio': float(data.get('PERatio',0)) if data.get('PERatio') and data.get('PERatio') != 'None' and data.get('PERatio') != '0' else None,
@@ -590,55 +557,28 @@ def get_alpha_vantage_smart(symbol):
                         fundamentals_cache.set(cache_key, result)
                         alpha_manager.record_call()
                         
-                        # Debug-Log Erfolg
                         debug_log = st.session_state.get('debug_alpha_calls', [])
                         debug_log.append(f"{datetime.now().strftime('%H:%M:%S')} - {symbol}: ERFOLG (Key {alpha_manager.current_index+1})")
                         st.session_state['debug_alpha_calls'] = debug_log[-50:]
                         
-                        logger.info(f"Alpha Vantage Erfolg für {symbol}: PE={result['pe_ratio']}")
                         return result, False
                     else:
-                        # Keine Daten für dieses Symbol (z.B. falsches Symbol)
-                        debug_log = st.session_state.get('debug_alpha_calls', [])
-                        debug_log.append(f"{datetime.now().strftime('%H:%M:%S')} - {symbol}: Keine Daten (Symbol nicht gefunden)")
-                        st.session_state['debug_alpha_calls'] = debug_log[-50:]
                         return None, False
                 else:
-                    # Netzwerkfehler, versuche nächsten Key
-                    logger.warning(f"Netzwerkfehler für {symbol}, rotiere Key")
-                    debug_log = st.session_state.get('debug_alpha_calls', [])
-                    debug_log.append(f"{datetime.now().strftime('%H:%M:%S')} - {symbol}: Netzwerkfehler")
-                    st.session_state['debug_alpha_calls'] = debug_log[-50:]
-                    
                     alpha_manager.rotate_key()
                     attempts += 1
                     time.sleep(0.5)
                     continue
                     
             except Exception as e:
-                logger.error(f"Exception bei Alpha Vantage für {symbol}: {e}")
-                debug_log = st.session_state.get('debug_alpha_calls', [])
-                debug_log.append(f"{datetime.now().strftime('%H:%M:%S')} - {symbol}: EXCEPTION - {str(e)[:50]}")
-                st.session_state['debug_alpha_calls'] = debug_log[-50:]
-                
                 alpha_manager.rotate_key()
                 attempts += 1
                 time.sleep(0.5)
                 continue
         else:
-            # Aktueller Key kann nicht verwendet werden (Rate Limit), rotiere
-            logger.debug(f"Key {alpha_manager.current_index + 1} kann nicht verwendet werden (Rate Limit), rotiere")
-            debug_log = st.session_state.get('debug_alpha_calls', [])
-            debug_log.append(f"{datetime.now().strftime('%H:%M:%S')} - {symbol}: Key {alpha_manager.current_index+1} rate-limited")
-            st.session_state['debug_alpha_calls'] = debug_log[-50:]
-            
             alpha_manager.rotate_key()
             attempts += 1
     
-    logger.warning(f"Alle Alpha Vantage Versuche für {symbol} erschöpft")
-    debug_log = st.session_state.get('debug_alpha_calls', [])
-    debug_log.append(f"{datetime.now().strftime('%H:%M:%S')} - {symbol}: ALLE VERSUCHE ERSCHÖPFT")
-    st.session_state['debug_alpha_calls'] = debug_log[-50:]
     return None, False
 
 def analyze_news_tiered(symbol, tier, prelim_score):
@@ -675,108 +615,163 @@ def analyze_news_tiered(symbol, tier, prelim_score):
 
 # ============================== Analyse Hauptfunktion ==============================
 def analyze_smart(symbol, tier, total_tickers, market_ctx=None):
-    """Hauptanalyse Funktion - mit Feiertags-Handling"""
+    """Hauptanalyse Funktion - mit detailliertem Debug-Logging"""
+    debug_info = {
+        'symbol': symbol,
+        'tier': tier,
+        'errors': [],
+        'checks': {}
+    }
+    
     try:
-        ticker = yf.Ticker(symbol)
-        df = ticker.history(period='3mo', interval='1h')
+        # Hole Daten
+        try:
+            ticker = yf.Ticker(symbol)
+            df = ticker.history(period='3mo', interval='1d')  # Täglich statt stündlich für bessere Datenqualität
+        except Exception as e:
+            debug_info['errors'].append(f"Yahoo Finance Fehler: {e}")
+            _log_scan_debug(debug_info)
+            return None
         
-        if df is None or df.empty:
-            logger.debug(f"{symbol}: Keine Daten verfügbar (Feiertag/Markt geschlossen?)")
+        # Prüfe Datenqualität
+        if df is None:
+            debug_info['errors'].append("DataFrame ist None")
+            _log_scan_debug(debug_info)
             return None
             
-        if len(df) < 50:
-            logger.debug(f"{symbol}: Zu wenig Daten ({len(df)} Zeilen) - möglicherweise Feiertag")
+        if df.empty:
+            debug_info['errors'].append("DataFrame ist leer")
+            _log_scan_debug(debug_info)
+            return None
+        
+        debug_info['checks']['data_rows'] = len(df)
+        
+        if len(df) < 20:  # Reduziert von 50 auf 20
+            debug_info['errors'].append(f"Zu wenig Daten: {len(df)} Zeilen")
+            _log_scan_debug(debug_info)
             return None
             
-        if df['Close'].isna().all() or (df['Close'] == 0).all():
-            logger.debug(f"{symbol}: Keine gültigen Preisdaten")
+        if df['Close'].isna().all():
+            debug_info['errors'].append("Alle Close-Preise sind NaN")
+            _log_scan_debug(debug_info)
             return None
             
         df_clean = df.dropna()
-        if len(df_clean) < 30:
-            logger.debug(f"{symbol}: Zu wenig gültige Daten nach NaN-Entfernung")
-            return None
-            
-        if df_clean['Volume'].mean() < 50000:
-            return None
-            
-        hourly_ret = df_clean['Close'].pct_change().abs()
-        if hourly_ret.max() > 0.3:
-            return None
-            
-        current_price = float(df_clean['Close'].iloc[-1])
-        if not np.isfinite(current_price) or current_price <= 0:
-            logger.debug(f"{symbol}: Ungültiger Preis: {current_price}")
+        if len(df_clean) < 10:
+            debug_info['errors'].append(f"Zu wenig gültige Daten: {len(df_clean)}")
+            _log_scan_debug(debug_info)
             return None
         
-        lookback = min(70, len(df_clean)-10)
+        # Volumen-Check (nur warnen, nicht ablehnen)
+        avg_volume = df_clean['Volume'].mean()
+        debug_info['checks']['avg_volume'] = int(avg_volume)
+        if avg_volume < 50000:
+            debug_info['checks']['volume_warning'] = f"Niedriges Volumen: {avg_volume:.0f}"
+            # Nicht return None, nur warnen
+        
+        # Volatilität-Check
+        daily_ret = df_clean['Close'].pct_change().abs()
+        max_ret = daily_ret.max()
+        debug_info['checks']['max_daily_return'] = f"{max_ret:.2%}"
+        if max_ret > 0.5:  # Erhöht von 30% auf 50%
+            debug_info['errors'].append(f"Zu volatil: {max_ret:.1%}")
+            _log_scan_debug(debug_info)
+            return None
+            
+        # Preis-Checks
+        current_price = float(df_clean['Close'].iloc[-1])
+        debug_info['checks']['current_price'] = current_price
+        
+        if not np.isfinite(current_price) or current_price <= 0:
+            debug_info['errors'].append(f"Ungültiger Preis: {current_price}")
+            _log_scan_debug(debug_info)
+            return None
+        
+        # Pullback-Berechnung
+        lookback = min(50, len(df_clean)-5)
         recent = df_clean.tail(lookback)
         recent_high = float(recent['High'].max())
+        debug_info['checks']['recent_high'] = recent_high
         
         if not np.isfinite(recent_high) or recent_high <= 0:
+            debug_info['errors'].append(f"Ungültiges recent_high: {recent_high}")
+            _log_scan_debug(debug_info)
             return None
             
         pullback_pct = (recent_high - current_price) / recent_high
-        if not np.isfinite(pullback_pct):
-            return None
-            
-        if pullback_pct < MIN_PULLBACK_PERCENT or pullback_pct > MAX_PULLBACK_PERCENT:
-            return None
-            
-        structure = analyze_structure(df_clean, symbol)
+        debug_info['checks']['pullback_pct'] = f"{pullback_pct:.2%}"
         
-        if not structure or not isinstance(structure, dict):
-            logger.debug(f"{symbol}: Ungültiges Structure-Ergebnis")
+        if not np.isfinite(pullback_pct):
+            debug_info['errors'].append("Pullback-Berechnung fehlgeschlagen")
+            _log_scan_debug(debug_info)
             return None
             
+        # KORRIGIERT: Lockerere Pullback-Grenzen für Test
+        if pullback_pct < 0.05 or pullback_pct > 0.40:  # 5% bis 40% statt 10% bis 25%
+            debug_info['errors'].append(f"Pullback außerhalb Range: {pullback_pct:.1%}")
+            _log_scan_debug(debug_info)
+            return None
+            
+        # Struktur-Analyse
+        structure = analyze_structure(df_clean, symbol)
+        debug_info['checks']['structure'] = {
+            'intact': structure.get('structure_intact', False),
+            'higher_highs': structure.get('higher_highs', False),
+            'higher_lows': structure.get('higher_lows', False)
+        }
+        
         if not structure.get('structure_intact', False):
+            debug_info['errors'].append("Struktur nicht intakt")
+            _log_scan_debug(debug_info)
             return None
             
         last_swing_low = structure.get('last_swing_low')
         if last_swing_low is None or not np.isfinite(last_swing_low) or last_swing_low <= 0:
-            logger.debug(f"{symbol}: Ungültiges last_swing_low: {last_swing_low}")
+            debug_info['errors'].append(f"Ungültiges last_swing_low: {last_swing_low}")
+            _log_scan_debug(debug_info)
             return None
             
-        if current_price < last_swing_low * 0.98:
+        if current_price < last_swing_low * 0.95:  # 5% unter Swing Low erlaubt
+            debug_info['errors'].append(f"Preis unter Swing Low: {current_price} < {last_swing_low * 0.95}")
+            _log_scan_debug(debug_info)
             return None
             
         # Score Berechnung
         score = 30
         trend_slope = structure.get('trend_slope', 0)
-        if trend_slope is not None and np.isfinite(trend_slope) and trend_slope > 0.02:
+        if trend_slope is not None and np.isfinite(trend_slope) and trend_slope > 0.01:
             score += 15
             
-        avg_vol = df_clean['Volume'].tail(20).mean()
+        # Volumen-Score
         current_vol = df_clean['Volume'].iloc[-1]
-        rvol = current_vol/avg_vol if avg_vol>0 else 1.0
-        if not np.isfinite(rvol):
-            rvol = 1.0
-            
+        rvol = current_vol/avg_volume if avg_volume>0 else 1.0
         if rvol>2:
             score += 20
-        elif rvol>1.5:
+        elif rvol>1.2:
             score += 10
             
+        # Support-Score
         support_dist = (current_price - last_swing_low)/current_price if current_price > 0 else 1.0
-        if not np.isfinite(support_dist):
-            support_dist = 1.0
-            
-        if support_dist < 0.03:
+        if support_dist < 0.05:
             score += 15
-        elif support_dist < 0.05:
+        elif support_dist < 0.10:
             score += 8
             
-        # News & fundamentale Daten
+        debug_info['checks']['preliminary_score'] = score
+        
+        # News
         news, sources, cached_news = analyze_news_tiered(symbol, tier, score)
         if news:
             score += news[0]['score']
+            debug_info['checks']['news_found'] = True
             
-        # KORRIGIERT: Alpha Vantage für ALLE gültigen Setups abrufen (nicht nur Tier <= 15)
-        # Aber nur wenn Score bereits gut ist (>40) um API-Calls zu sparen
+        # Alpha Vantage - für alle mit Score > 30
         fundamentals, fund_cached = None, False
-        if score > 40:  # Geändert von tier <= 15 zu score > 40
+        if score > 30:
             fundamentals, fund_cached = get_alpha_vantage_smart(symbol)
-            
+            if fundamentals:
+                debug_info['checks']['fundamentals'] = True
+                
         pe_ratio = None
         if fundamentals:
             pe_ratio = fundamentals.get('pe_ratio')
@@ -794,51 +789,64 @@ def analyze_smart(symbol, tier, total_tickers, market_ctx=None):
             atr = float(atr_series.mean())
             if not np.isfinite(atr) or atr <= 0:
                 atr = current_price * 0.02
-        except Exception as e:
+        except:
             atr = current_price * 0.02
             
-        technical_stop = last_swing_low * 0.985
+        technical_stop = last_swing_low * 0.98
         atr_stop = current_price - (2*atr)
         stop_loss = max(technical_stop, atr_stop)
         
         if not np.isfinite(stop_loss) or stop_loss <= 0 or stop_loss >= current_price:
+            debug_info['errors'].append(f"Ungültiger Stop-Loss: {stop_loss}")
+            _log_scan_debug(debug_info)
             return None
             
-        recent_high_calc = float(df_clean['High'].max())
-        if not np.isfinite(recent_high_calc):
-            recent_high_calc = current_price * 1.1
-            
-        target1 = recent_high_calc * 0.98
+        # Targets
+        target1 = recent_high * 0.98
         target2 = current_price + (current_price - stop_loss) * 2
         target = min(target1, target2)
         
         if not np.isfinite(target) or target <= current_price:
+            debug_info['errors'].append(f"Ungültiges Target: {target}")
+            _log_scan_debug(debug_info)
             return None
             
         risk = current_price - stop_loss
         reward = target - current_price
         rr_ratio = reward/risk if risk > 0 else 0
         
-        if not np.isfinite(rr_ratio) or rr_ratio < 1.5:
+        debug_info['checks']['rr_ratio'] = f"{rr_ratio:.2f}"
+        
+        if not np.isfinite(rr_ratio) or rr_ratio < 1.2:  # Reduziert von 1.5 auf 1.2
+            debug_info['errors'].append(f"R:R zu niedrig: {rr_ratio:.2f}")
+            _log_scan_debug(debug_info)
             return None
             
         if market_ctx and market_ctx.get('risk_off'):
             score -= 10
             
-        if score < 50:
+        # KORRIGIERT: Niedrigere Mindestpunktzahl
+        if score < 40:  # Reduziert von 50 auf 40
+            debug_info['errors'].append(f"Score zu niedrig: {score}")
+            _log_scan_debug(debug_info)
             return None
             
+        # Gründe
         reasons = [f"📉 -{pullback_pct:.1f}%"]
-        if trend_slope is not None and np.isfinite(trend_slope) and trend_slope > 0.02:
+        if trend_slope is not None and np.isfinite(trend_slope) and trend_slope > 0.01:
             reasons.append("📈 Trend")
-        if rvol > 1.5:
+        if rvol > 1.2:
             reasons.append(f"⚡ Vol {rvol:.1f}x")
-        if support_dist < 0.03:
+        if support_dist < 0.05:
             reasons.append("🎯 Support")
         if news:
             reasons.append(f"📰 {news[0]['source']}")
         if pe_ratio is not None and np.isfinite(pe_ratio):
             reasons.append(f"{'💰' if pe_ratio<15 else '📊'} PE {pe_ratio:.1f}")
+        
+        debug_info['checks']['final_score'] = score
+        debug_info['success'] = True
+        _log_scan_debug(debug_info)
             
         return {
             'symbol': symbol,
@@ -846,7 +854,7 @@ def analyze_smart(symbol, tier, total_tickers, market_ctx=None):
             'score': min(100, int(score)),
             'price': current_price,
             'pullback_pct': pullback_pct,
-            'recent_high': recent_high_calc,
+            'recent_high': recent_high,
             'stop_loss': stop_loss,
             'target': target,
             'rr_ratio': rr_ratio,
@@ -859,12 +867,15 @@ def analyze_smart(symbol, tier, total_tickers, market_ctx=None):
         }
         
     except Exception as e:
-        error_msg = str(e).lower()
-        if any(x in error_msg for x in ['none', 'empty', 'nan', 'holiday', 'closed']):
-            logger.debug(f"{symbol}: Analyse nicht möglich (Marktdaten unvollständig): {e}")
-        else:
-            logger.error(f"Analyse Fehler {symbol}: {e}")
+        debug_info['errors'].append(f"Unerwarteter Fehler: {e}")
+        _log_scan_debug(debug_info)
         return None
+
+def _log_scan_debug(debug_info):
+    """Hilfsfunktion zum Loggen von Scan-Debug-Info"""
+    scan_debug = st.session_state.get('scan_debug', [])
+    scan_debug.append(debug_info)
+    st.session_state['scan_debug'] = scan_debug[-100:]  # Letzte 100 Einträge
 
 # ============================== Alert Management ==============================
 def should_send_alert(symbol, current_price, current_score):
@@ -1050,11 +1061,10 @@ with st.sidebar:
 </div>
 """, unsafe_allow_html=True)
 
-    # NEU: Alpha Vantage Debug-Bereich
+    # Alpha Vantage Debug-Bereich
     st.divider()
     st.header("🔍 Alpha Vantage Debug")
     
-    # Zeige aktuellen Key-Status
     current_key_idx = alpha_manager.current_index
     current_key = alpha_manager.get_current_key()
     
@@ -1062,7 +1072,6 @@ with st.sidebar:
         st.write(f"Aktiver Key: #{current_key_idx + 1}")
         st.write(f"Key: {current_key[:8]}...{current_key[-4:]}")
         
-        # Teste aktuellen Key
         if st.button("🧪 Test API Call (IBM)"):
             with st.spinner("Teste Alpha Vantage..."):
                 test_url = "https://www.alphavantage.co/query"
@@ -1094,8 +1103,7 @@ with st.sidebar:
                 except Exception as e:
                     st.error(f"❌ Fehler: {e}")
         
-        # Manuelle Abfrage für ein Symbol
-        manual_symbol = st.text_input("Manuelle Abfrage:", placeholder="z.B. AAPL").upper()
+        manual_symbol = st.text_input("Manuelle Abfrage:", placeholder="z.B. AAPL", key="manual_alpha").upper()
         if st.button("🔍 Fundamentale Daten abrufen") and manual_symbol:
             with st.spinner(f"Rufe Daten für {manual_symbol}..."):
                 result, cached = get_alpha_vantage_smart(manual_symbol)
@@ -1107,7 +1115,6 @@ with st.sidebar:
                 else:
                     st.error(f"❌ Keine Daten für {manual_symbol} erhalten")
     
-    # Zeige Debug-Log
     with st.expander("📋 API Call Log (letzte 20)"):
         debug_logs = st.session_state.get('debug_alpha_calls', [])
         if debug_logs:
@@ -1116,11 +1123,10 @@ with st.sidebar:
         else:
             st.caption("Noch keine API-Calls durchgeführt")
     
-    # Reset API Stats
     if st.button("🔄 Stats zurücksetzen"):
         st.session_state['api_stats'] = {'finnhub':0,'alpha_vantage':0,'cache_hits':0,'alpha_rotation_count':0}
         st.session_state['debug_alpha_calls'] = []
-        # Reset exhausted keys
+        st.session_state['scan_debug'] = []
         for i in alpha_manager.limiters:
             alpha_manager.limiters[i]['exhausted'] = False
             alpha_manager.limiters[i]['calls_today'] = 0
@@ -1142,7 +1148,7 @@ with st.sidebar:
         st.session_state['auto_refresh'] = auto_mode
         st.rerun()
 
-    # Alert-History in Sidebar
+    # Alert-History
     st.divider()
     st.header("🚨 Alert History")
     alert_history = st.session_state.get('alert_history', [])
@@ -1209,6 +1215,9 @@ if scan_triggered:
         if market_ctx.get('market_closed'):
             st.warning("⚠️ Markt ist möglicherweise geschlossen (Feiertag/Wochenende). Daten können unvollständig sein.")
         
+        # Lösche vorherige Debug-Logs
+        st.session_state['scan_debug'] = []
+        
         gainers = []
         try:
             headers={'User-Agent':'Mozilla/5.0'}
@@ -1222,12 +1231,14 @@ if scan_triggered:
                     pass
         except:
             pass
+            
         scan_list = [(s, '📋') for s in st.session_state['watchlist']]
         seen = set(st.session_state['watchlist'])
         for g in gainers:
             if g not in seen and isinstance(g,str):
                 scan_list.append((g, '🌍'))
                 seen.add(g)
+        
         results = []
         progress = st.progress(0)
         status_text = st.empty()
@@ -1276,10 +1287,25 @@ if scan_triggered:
         progress.empty()
         status_text.empty()
         
-        if error_count > 0 and clock.get('is_holiday'):
-            st.info(f"📊 Scan abgeschlossen: {success_count} Setups gefunden. {error_count} Tickers hatten keine Daten (Feiertag).")
-        elif error_count > 0:
-            st.info(f"📊 Scan abgeschlossen: {success_count} Setups gefunden, {error_count} Fehler")
+        # Zeige Debug-Info
+        scan_debug = st.session_state.get('scan_debug', [])
+        rejected = [d for d in scan_debug if not d.get('success')]
+        accepted = [d for d in scan_debug if d.get('success')]
+        
+        st.info(f"📊 Scan abgeschlossen: {success_count} Setups gefunden, {error_count} abgelehnt")
+        
+        # Zeige häufigste Ablehnungsgründe
+        if rejected:
+            error_counts = {}
+            for item in rejected:
+                for err in item.get('errors', []):
+                    # Gruppiere ähnliche Fehler
+                    key = err.split(':')[0] if ':' in err else err[:30]
+                    error_counts[key] = error_counts.get(key, 0) + 1
+            
+            with st.expander(f"⚠️ Häufigste Ablehnungsgründe ({len(rejected)} Einträge)"):
+                for err, count in sorted(error_counts.items(), key=lambda x: x[1], reverse=True)[:5]:
+                    st.write(f"• {err}: {count}x")
         
         st.session_state['scan_results']=results
         st.session_state['last_scan_time']=datetime.now()
@@ -1368,7 +1394,6 @@ if results:
         ctx = get_market_context()
         st.write(f"**Marktkontext:** {'Risk-Off' if ctx.get('risk_off') else 'Risk-On'} (SPY: {ctx.get('spy_change',0):.2%}, VIX: {ctx.get('vix_level',0):.1f})")
         
-        # Zeige Alpha Vantage Debug-Log
         st.write("---")
         st.write("**Alpha Vantage Debug-Log:**")
         debug_logs = st.session_state.get('debug_alpha_calls', [])
@@ -1383,6 +1408,26 @@ if results:
         for symbol, alert in list(st.session_state.get('sent_alerts', {}).items())[:5]:
             ago = int((datetime.now() - alert['timestamp']).total_seconds() / 60)
             st.write(f"  • {symbol}: {alert['setup_type']} vor {ago}min @ ${alert['price']:.2f}")
+            
+elif scan_triggered:
+    # Wenn Scan ausgeführt wurde aber keine Ergebnisse
+    scan_debug = st.session_state.get('scan_debug', [])
+    if scan_debug:
+        with st.expander("🔍 Scan Debug-Details", expanded=True):
+            st.warning("Keine Setups gefunden. Zeige Debug-Informationen:")
+            
+            # Zeige einige Beispiele von abgelehnten Aktien
+            rejected_samples = [d for d in scan_debug if not d.get('success')][:10]
+            for item in rejected_samples:
+                with st.container():
+                    cols = st.columns([1, 3])
+                    with cols[0]:
+                        st.write(f"**{item['symbol']}** (T{item['tier']})")
+                    with cols[1]:
+                        if item.get('checks'):
+                            st.write("Checks:", item['checks'])
+                        if item.get('errors'):
+                            st.error("Fehler: " + " | ".join(item['errors']))
+                    st.divider()
 else:
-    if not scan_triggered:
-        st.info("👆 Klicke 'Smart Scan Starten' oder aktiviere 'Live-Modus' in der Sidebar.")
+    st.info("👆 Klicke 'Smart Scan Starten' oder aktiviere 'Live-Modus' in der Sidebar.")
