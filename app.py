@@ -1,8 +1,6 @@
-Hier ist der vollständige, korrigierte und integrierte Code für deinen Streamlit-basierten Bull Scanner, inklusive der optimierten Alpha Vantage Funktion `get_alpha_vantage_smart()` und der Analyse `analyze_smart()`. Ich habe alle wichtigen Änderungen, Limit-Management und Kommentare integriert, damit dein Scanner zuverlässig läuft.
 
----
 
-```python
+python
 import streamlit as st
 import yfinance as yf
 import pandas as pd
