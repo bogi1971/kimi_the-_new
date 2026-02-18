@@ -1,6 +1,6 @@
 """
-Elite Bull Scanner Pro V7.0 - Async Refactor
-Mit Type Hints, Unit Tests und strikten Rate-Limits
+Elite Bull Scanner Pro V7.2 - Vollständige Version mit ThreadPool & Gemini AI Integration
+Kein aiohttp nötig, nutzt concurrent.futures für Parallelisierung
 """
 
 import streamlit as st
@@ -8,10 +8,9 @@ import yfinance as yf
 import pandas as pd
 import time
 import requests
-import asyncio
-import aiohttp
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta
-from typing import Optional, Dict, List, Tuple, Any, Set, Callable
+from typing import Optional, Dict, List, Tuple, Any, Set, Union
 from dataclasses import dataclass, field
 from enum import Enum
 from io import StringIO
@@ -21,13 +20,218 @@ import logging
 import random
 import os
 import json
-from functools import wraps
-import pytest
-from unittest.mock import Mock, patch, AsyncMock
+import threading
+import numpy as np
+import google.generativeai as genai
 
 warnings.filterwarnings('ignore')
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+# ============================== CSS Styles ==============================
+st.markdown("""
+<style>
+.bull-card { 
+    border: 1px solid #333; 
+    border-radius: 10px; 
+    padding: 15px; 
+    margin: 10px 0; 
+    background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+    box-shadow: 0 4px 6px rgba(0,0,0,0.3);
+    transition: transform 0.2s;
+}
+.bull-card:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 6px 12px rgba(0,0,0,0.4);
+}
+.pullback-badge { 
+    padding: 5px 10px; 
+    border-radius: 5px; 
+    color: white; 
+    font-weight: bold;
+    display: inline-block;
+    margin: 5px 0;
+}
+.tier-badge { 
+    background: #444; 
+    padding: 2px 8px; 
+    border-radius: 3px; 
+    font-size: 0.7rem; 
+    margin: 0 2px;
+    color: #fff;
+    border: 1px solid #555;
+}
+.cache-badge {
+    background: #2d5a2d;
+    padding: 2px 8px;
+    border-radius: 3px;
+    font-size: 0.7rem;
+    margin: 0 2px;
+    color: #90EE90;
+}
+.price {
+    font-size: 1.5rem;
+    font-weight: bold;
+    color: #00FF00;
+    margin: 10px 0;
+}
+.stop-loss {
+    background: #ff4b4b;
+    color: white;
+    padding: 3px 8px;
+    border-radius: 3px;
+    font-size: 0.8rem;
+    margin-right: 5px;
+}
+.target {
+    background: #00FF00;
+    color: black;
+    padding: 3px 8px;
+    border-radius: 3px;
+    font-size: 0.8rem;
+}
+.confidence-bar {
+    width: 100%;
+    height: 8px;
+    background: #333;
+    border-radius: 4px;
+    overflow: hidden;
+    margin: 5px 0;
+}
+.confidence-fill {
+    height: 100%;
+    transition: width 0.3s ease;
+}
+.news-link-btn {
+    display: block;
+    background: #1f4068;
+    color: #fff;
+    text-decoration: none;
+    padding: 8px;
+    border-radius: 5px;
+    margin: 5px 0;
+    font-size: 0.8rem;
+    text-align: center;
+}
+.news-link-btn:hover {
+    background: #2a5585;
+}
+.btn-link {
+    display: block;
+    background: #4a4a4a;
+    color: #fff;
+    text-decoration: none;
+    padding: 8px;
+    border-radius: 5px;
+    margin: 5px 0;
+    font-size: 0.8rem;
+    text-align: center;
+}
+.btn-link:hover {
+    background: #5a5a5a;
+}
+.market-clock-container {
+    background: linear-gradient(135deg, #1a1a2e 0%, #0f0f23 100%);
+    padding: 20px;
+    border-radius: 15px;
+    text-align: center;
+    margin: 20px 0;
+    border: 1px solid #333;
+}
+.market-time {
+    font-size: 2.5rem;
+    font-weight: bold;
+    color: #00FF00;
+    font-family: 'Courier New', monospace;
+}
+.market-status {
+    padding: 8px 20px;
+    border-radius: 20px;
+    font-weight: bold;
+    color: white;
+    display: inline-block;
+    margin: 10px 0;
+}
+.market-countdown {
+    font-size: 1.2rem;
+    color: #FFD700;
+    margin: 10px 0;
+}
+.market-progress {
+    width: 100%;
+    height: 6px;
+    background: #333;
+    border-radius: 3px;
+    overflow: hidden;
+    margin-top: 10px;
+}
+.market-progress-bar {
+    height: 100%;
+    background: linear-gradient(90deg, #00FF00, #FFD700);
+    transition: width 1s ease;
+}
+.holiday-banner {
+    background: linear-gradient(90deg, #ff4b4b, #ff6b6b);
+    color: white;
+    padding: 20px;
+    border-radius: 10px;
+    text-align: center;
+    font-size: 1.2rem;
+    margin: 20px 0;
+    border: 2px solid #ff3333;
+}
+.info-box {
+    background: #1a1a2e;
+    padding: 15px;
+    border-radius: 8px;
+    border-left: 4px solid #00FF00;
+    margin: 10px 0;
+}
+.error-box {
+    background: #2d1a1a;
+    padding: 15px;
+    border-radius: 8px;
+    border-left: 4px solid #ff4b4b;
+    margin: 10px 0;
+    color: #ff9999;
+}
+.api-stat {
+    background: #1a1a2e;
+    padding: 10px;
+    border-radius: 5px;
+    margin: 5px 0;
+    font-size: 0.9rem;
+}
+.key-indicator {
+    padding: 8px;
+    margin: 5px 0;
+    border-radius: 5px;
+    background: #2a2a3e;
+    font-size: 0.85rem;
+}
+.key-active {
+    border-left: 3px solid #00FF00;
+    background: #1a2a1a;
+}
+.key-exhausted {
+    border-left: 3px solid #ff4b4b;
+    opacity: 0.6;
+}
+.mover-badge {
+    background: linear-gradient(90deg, #ff6b6b, #ffa502);
+    color: white;
+    padding: 3px 8px;
+    border-radius: 3px;
+    font-size: 0.7rem;
+    margin: 0 2px;
+    font-weight: bold;
+}
+.source-watchlist { border-left: 3px solid #00FF00; }
+.source-gainers { border-left: 3px solid #ff6b6b; }
+.source-losers { border-left: 3px solid #ffa502; }
+.source-mostactive { border-left: 3px solid #FFD700; }
+</style>
+""", unsafe_allow_html=True)
 
 # ============================== Type Definitions ==============================
 
@@ -38,27 +242,18 @@ class SourceType(str, Enum):
     MOST_ACTIVE = "most_active"
     UNKNOWN = "unknown"
 
-class MarketStatus(str, Enum):
-    OPEN = "OPEN"
-    CLOSED = "CLOSED"
-    PRE_MARKET = "PRE-MARKET"
-    HOLIDAY = "HOLIDAY"
-
 @dataclass
 class RateLimitConfig:
-    """Konfiguration für API Rate Limits"""
-    calls_per_second: float = 1.0  # Yahoo Finance: konservativ 1/s
-    calls_per_minute: int = 60     # Finnhub
-    calls_per_day: int = 25        # Alpha Vantage pro Key
-    burst_size: int = 5            # Kurzzeitig erlaubte Burst-Größe
+    calls_per_second: float = 1.0
+    calls_per_minute: int = 60
+    calls_per_day: int = 25
+    burst_size: int = 3
     
     def get_min_delay(self) -> float:
-        """Minimale Delay zwischen Calls in Sekunden"""
         return 1.0 / self.calls_per_second
 
 @dataclass 
 class ScanResult:
-    """Typisiertes Ergebnis einer Symbol-Analyse"""
     symbol: str
     tier: int
     score: int
@@ -76,703 +271,1372 @@ class ScanResult:
     from_cache: bool = False
     source: SourceType = SourceType.UNKNOWN
 
-@dataclass
-class MarketContext:
-    """Marktkontext mit Typ-Sicherheit"""
-    risk_off: bool
-    spy_change: float
-    vix_level: float
-    market_closed: bool
-    timestamp: datetime = field(default_factory=datetime.now)
+# ============================== Konfiguration ==============================
 
-# ============================== Rate Limit Manager ==============================
+st.set_page_config(layout="wide", page_title="Elite Bull Scanner Pro V7.2", page_icon="🐂")
 
-class AsyncRateLimiter:
-    """Thread-sicherer Async Rate Limiter mit Token-Bucket-Algorithmus"""
-    
-    def __init__(self, config: RateLimitConfig):
-        self.config = config
-        self._semaphore = asyncio.Semaphore(config.burst_size)
-        self._last_call_time: float = 0.0
-        self._lock = asyncio.Lock()
-        self._daily_calls: int = 0
-        self._minute_calls: List[float] = []
-        
-    async def acquire(self) -> bool:
-        """Erlaubt Call wenn Rate-Limit nicht überschritten"""
-        async with self._lock:
-            now = time.time()
-            
-            # Clean up alte Minute-Calls
-            self._minute_calls = [t for t in self._minute_calls if now - t < 60]
-            
-            # Prüfe Daily Limit
-            if self._daily_calls >= self.config.calls_per_day:
-                return False
-                
-            # Prüfe Minute Limit
-            if len(self._minute_calls) >= self.config.calls_per_minute:
-                return False
-            
-            # Enforce min delay
-            time_since_last = now - self._last_call_time
-            if time_since_last < self.config.get_min_delay():
-                await asyncio.sleep(self.config.get_min_delay() - time_since_last)
-            
-            # Record call
-            self._last_call_time = time.time()
-            self._minute_calls.append(self._last_call_time)
-            self._daily_calls += 1
-            
-        return True
-    
-    async def __aenter__(self):
-        if not await self.acquire():
-            raise RateLimitExceeded("API Rate Limit erreicht")
-        await self._semaphore.acquire()
-        return self
-    
-    async def __aexit__(self, exc_type, exc_val, exc_tb):
-        self._semaphore.release()
+# Filter Einstellungen
+MIN_PULLBACK_PERCENT = 0.05
+MAX_PULLBACK_PERCENT = 0.50
+AUTO_REFRESH_INTERVAL = 3600  # 1-Stunden-Takt
+ALERT_COOLDOWN_MINUTES = 60
+MIN_SCORE_THRESHOLD = 60
+MAX_WATCHLIST_SIZE = 100
 
-class RateLimitExceeded(Exception):
-    pass
+# API Keys - AUS SECRETS LADEN!
+try:
+    TELEGRAM_BOT_TOKEN = st.secrets["telegram"]["bot_token"]
+    TELEGRAM_CHAT_ID = st.secrets["telegram"]["chat_id"]
+    FINNHUB_API_KEY = st.secrets["finnhub"]["api_key"]
+    ALPHA_VANTAGE_KEYS = st.secrets["alpha_vantage"]["keys"]
+except Exception as e:
+    logger.warning(f"Secrets nicht gefunden: {e}")
+    TELEGRAM_BOT_TOKEN = ""
+    TELEGRAM_CHAT_ID = ""
+    FINNHUB_API_KEY = ""
+    ALPHA_VANTAGE_KEYS = []
 
-# API-spezifische Limiter
-YAHOO_LIMITER = AsyncRateLimiter(RateLimitConfig(
-    calls_per_second=0.8,  # Konservativ: alle 1.25s
-    burst_size=3
-))
+DEFAULT_WATCHLIST = sorted(list(set([
+    "NVDA", "TSLA", "AMD", "PLTR", "COIN", "MSTR", "HOOD", "CRWD", "AAPL", "MSFT", 
+    "AMZN", "MARA", "SAP", "LLY", "ABBV", "JNJ", "PFE", "MRK", "BMY", "GILD", "AMGN", 
+    "BIIB", "VRTX", "REGN", "MRNA", "BNTX", "GSK", "AZN", "SNY", "JAZZ", "ALNY", "IONS", 
+    "NTLA", "EDIT", "CRSP", "BEAM", "VNDA", "SAVA", "GERN", "FATE", "IOVA", "SRPT", 
+    "RCKT", "APLS", "HALO", "AQST", "IBRX", "ASND", "DNLI", "ALDX", "LNTH", "REPL", 
+    "CING", "ACHV", "ATRA", "TBPH", "ROG", "ETON", "BMRN", "CRVS", "NVAX", "UUUU", 
+    "CELC", "RAPT", "ACRS"
+])))
 
-FINNHUB_LIMITER = AsyncRateLimiter(RateLimitConfig(
-    calls_per_minute=60,
-    burst_size=10
-))
+FALLBACK_MOVERS = {
+    'gainers': ["MARA", "RIOT", "HUT", "COIN", "HOOD", "MSTR", "NVDA", "AMD", "PLTR", "TSLA"],
+    'losers': ["PFE", "BMY", "GILD", "AMGN", "JNJ", "SNY", "GSK", "AZN", "MRK", "ABBV"],
+    'most_active': ["TSLA", "NVDA", "AMD", "PLTR", "COIN", "MSTR", "HOOD", "AAPL", "MSFT", "AMZN"]
+}
 
-ALPHA_LIMITERS = [
-    AsyncRateLimiter(RateLimitConfig(
-        calls_per_minute=5,  # 5 calls per minute
-        calls_per_day=25,
-        burst_size=2
-    )) for _ in range(3)  # 3 Keys
-]
+# ============================== Session State ==============================
 
-# ============================== Async Data Fetchers ==============================
+def init_session_state():
+    defaults = {
+        'watchlist': DEFAULT_WATCHLIST,
+        'sent_alerts': {},
+        'api_stats': {'yahoo': 0, 'finnhub': 0, 'alpha_vantage': 0, 'cache_hits': 0, 'alpha_rotation_count': 0},
+        'scan_results': [],
+        'last_scan_time': None,
+        'auto_refresh': False,
+        'refresh_count': 0,
+        'last_auto_refresh': 0,
+        'last_movers_check': 0,
+        'alert_history': [],
+        'scan_debug': [],
+        'top_movers_cache': FALLBACK_MOVERS,
+        'combined_universe': set(DEFAULT_WATCHLIST + [s for sublist in FALLBACK_MOVERS.values() for s in sublist]),
+        'movers_source': 'fallback',
+    }
+    for k, v in defaults.items():
+        if k not in st.session_state:
+            st.session_state[k] = v
 
-class YahooFinanceClient:
-    """Async Yahoo Finance Client mit Rate Limiting und Caching"""
-    
+init_session_state()
+
+# ============================== Cache & API Manager ==============================
+
+class SmartCache:
     def __init__(self):
-        self._session: Optional[aiohttp.ClientSession] = None
-        self._cache: Dict[str, Tuple[pd.DataFrame, float]] = {}
-        self._cache_ttl: int = 300  # 5 Minuten
+        self.cache = {}
+        self.timestamps = {}
         
-    async def _get_session(self) -> aiohttp.ClientSession:
-        if self._session is None or self._session.closed:
-            self._session = aiohttp.ClientSession(
-                timeout=aiohttp.ClientTimeout(total=30),
-                headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
-            )
-        return self._session
-    
-    async def fetch_history(self, symbol: str, period: str = "3mo") -> Optional[pd.DataFrame]:
-        """Async Yahoo Finance Daten mit Rate Limiting"""
-        cache_key = f"yh_{symbol}_{period}"
-        
-        # Check Cache
-        if cache_key in self._cache:
-            data, timestamp = self._cache[cache_key]
-            if time.time() - timestamp < self._cache_ttl:
-                return data
-        
-        # Rate Limiting
-        async with YAHOO_LIMITER:
-            try:
-                # Yahoo Finance hat kein offizielles REST API für History
-                # Wir verwenden yfinance synchron in ThreadPool
-                loop = asyncio.get_event_loop()
-                df = await loop.run_in_executor(
-                    None, 
-                    lambda: yf.Ticker(symbol).history(period=period, interval='1d')
-                )
-                
-                if not df.empty:
-                    self._cache[cache_key] = (df, time.time())
-                    return df
-                    
-            except Exception as e:
-                logger.error(f"Yahoo Fehler für {symbol}: {e}")
-                await asyncio.sleep(2)  # Backoff bei Fehler
-                
+    def get(self, key: str, ttl: int = 600) -> Optional[Any]:
+        if key in self.cache:
+            age = time.time() - self.timestamps.get(key, 0)
+            if age < ttl:
+                return self.cache[key]
+            del self.cache[key]
+            del self.timestamps[key]
         return None
-    
-    async def fetch_batch(self, symbols: List[str], max_concurrent: int = 3) -> Dict[str, pd.DataFrame]:
-        """Batch Fetch mit begrenzter Parallelität"""
-        semaphore = asyncio.Semaphore(max_concurrent)
         
-        async def fetch_one(sym: str) -> Tuple[str, Optional[pd.DataFrame]]:
-            async with semaphore:
-                data = await self.fetch_history(sym)
-                return sym, data
-        
-        tasks = [fetch_one(s) for s in symbols]
-        results = await asyncio.gather(*tasks, return_exceptions=True)
-        
-        return {
-            sym: data for sym, data in results 
-            if not isinstance(data, Exception) and data is not None
-        }
+    def set(self, key: str, value: Any):
+        self.cache[key] = value
+        self.timestamps[key] = time.time()
 
-class FinnhubClient:
-    """Async Finnhub Client für News"""
-    
-    def __init__(self, api_key: str):
-        self.api_key = api_key
-        self._session: Optional[aiohttp.ClientSession] = None
-        self._cache: SmartCache = SmartCache()
-        
-    async def _get_session(self) -> aiohttp.ClientSession:
-        if self._session is None or self._session.closed:
-            self._session = aiohttp.ClientSession(
-                timeout=aiohttp.ClientTimeout(total=10)
-            )
-        return self._session
-    
-    async def get_news(self, symbol: str) -> Tuple[Optional[List[Dict]], bool]:
-        """News mit Rate Limiting und Caching"""
-        cache_key = f"news_{symbol}"
-        cached = self._cache.get(cache_key, 300)
-        if cached:
-            return cached, True
-        
-        async with FINNHUB_LIMITER:
-            try:
-                session = await self._get_session()
-                url = "https://finnhub.io/api/v1/company-news"
-                params = {
-                    'symbol': symbol,
-                    'from': (datetime.now() - timedelta(days=7)).strftime('%Y-%m-%d'),
-                    'to': datetime.now().strftime('%Y-%m-%d'),
-                    'token': self.api_key
-                }
-                
-                async with session.get(url, params=params) as response:
-                    if response.status == 200:
-                        data = await response.json()
-                        if isinstance(data, list) and len(data) > 0:
-                            formatted = [
-                                {
-                                    'title': item.get('headline', 'No Title'),
-                                    'url': item.get('url', ''),
-                                    'source': item.get('source', 'Finnhub'),
-                                    'datetime': item.get('datetime', 0),
-                                    'score': 10
-                                }
-                                for item in sorted(data, key=lambda x: x.get('datetime', 0), reverse=True)[:5]
-                            ]
-                            self._cache.set(cache_key, formatted)
-                            return formatted, False
-                            
-            except Exception as e:
-                logger.error(f"Finnhub Fehler für {symbol}: {e}")
-                
-        return None, False
+news_cache = SmartCache()
+fundamentals_cache = SmartCache()
+structure_cache = SmartCache()
+market_context_cache = SmartCache()
+movers_cache = SmartCache()
 
-# ============================== Analysis Engine ==============================
-
-class TechnicalAnalyzer:
-    """Technische Analyse mit Type Hints"""
-    
-    @staticmethod
-    def analyze_structure(df: pd.DataFrame, symbol: Optional[str] = None) -> Dict[str, Any]:
-        """Swing High/Low Analyse mit NumPy"""
-        if df is None or df.empty or len(df) < 10:
-            return TechnicalAnalyzer._default_result()
+class RateLimiter:
+    def __init__(self, max_calls: int, window_seconds: int):
+        self.max_calls = max_calls
+        self.window = window_seconds
+        self.calls = []
+        self._lock = threading.Lock()
+        
+    def can_call(self) -> bool:
+        with self._lock:
+            now = time.time()
+            self.calls = [c for c in self.calls if now - c < self.window]
+            return len(self.calls) < self.max_calls
             
-        required = ['High', 'Low', 'Close']
-        if not all(c in df.columns for c in required):
-            return TechnicalAnalyzer._default_result()
+    def record_call(self) -> int:
+        with self._lock:
+            self.calls.append(time.time())
+            return len(self.calls)
+            
+    def get_status(self) -> str:
+        with self._lock:
+            now = time.time()
+            self.calls = [c for c in self.calls if now - c < self.window]
+            return f"{len(self.calls)}/{self.max_calls}"
+
+class AlphaVantageManager:
+    def __init__(self, keys: List[str]):
+        self.keys = [k for k in keys if k and len(k) > 10]
+        self.current_index = 0
+        self.limiters = {i: {'calls_today': 0, 'calls_per_min': [], 'key': k, 'exhausted': False} for i, k in enumerate(self.keys)}
+        self._lock = threading.Lock()
         
-        df_clean = df[required].dropna()
-        if len(df_clean) < 10:
-            return TechnicalAnalyzer._default_result()
+    def get_current_key(self) -> Optional[str]:
+        return self.keys[self.current_index] if self.keys else None
         
+    def rotate_key(self) -> Optional[str]:
+        if not self.keys:
+            return None
+        with self._lock:
+            for _ in range(len(self.keys)):
+                self.current_index = (self.current_index + 1) % len(self.keys)
+                if not self.limiters[self.current_index]['exhausted']:
+                    stats = st.session_state.get('api_stats', {})
+                    if isinstance(stats, dict):
+                        stats['alpha_rotation_count'] = stats.get('alpha_rotation_count', 0) + 1
+                        st.session_state['api_stats'] = stats
+                    return self.get_current_key()
+        return None
+        
+    def can_call(self, key_index: Optional[int] = None) -> bool:
+        if not self.keys:
+            return False
+        idx = key_index if key_index is not None else self.current_index
+        limiter = self.limiters[idx]
+        now = time.time()
+        limiter['calls_per_min'] = [c for c in limiter['calls_per_min'] if now - c < 60]
+        if len(limiter['calls_per_min']) >= 5:
+            return False
+        if limiter['calls_today'] >= 25:
+            limiter['exhausted'] = True
+            return False
+        return True
+        
+    def record_call(self, key_index: Optional[int] = None) -> int:
+        with self._lock:
+            idx = key_index if key_index is not None else self.current_index
+            limiter = self.limiters[idx]
+            limiter['calls_per_min'].append(time.time())
+            limiter['calls_today'] += 1
+            stats = st.session_state.get('api_stats', {})
+            if isinstance(stats, dict):
+                stats['alpha_vantage'] = stats.get('alpha_vantage', 0) + 1
+                st.session_state['api_stats'] = stats
+            return limiter['calls_today']
+            
+    def get_status(self) -> List[Dict]:
+        return [{
+            'index': i,
+            'key': f"{k[:4]}...{k[-4:]}" if len(k) > 8 else k,
+            'active': i == self.current_index,
+            'calls_today': self.limiters[i]['calls_today'],
+            'exhausted': self.limiters[i]['exhausted'],
+            'can_call': self.can_call(i)
+        } for i, k in enumerate(self.keys)]
+
+finnhub_limiter = RateLimiter(60, 60)
+alpha_manager = AlphaVantageManager(ALPHA_VANTAGE_KEYS)
+
+# ============================== Helper Functions ==============================
+
+def safe_requests_get(url: str, params: Optional[Dict] = None, headers: Optional[Dict] = None, timeout: int = 10) -> Optional[requests.Response]:
+    try:
+        response = requests.get(url, params=params, headers=headers, timeout=timeout)
+        response.raise_for_status()
+        return response
+    except requests.RequestException as e:
+        logger.error(f"API-Request Fehler: {e}")
+        return None
+
+def get_market_clock() -> Dict[str, Any]:
+    et = pytz.timezone('US/Eastern')
+    now = datetime.now(et)
+    market_open = now.replace(hour=9, minute=30, second=0, microsecond=0)
+    market_close = now.replace(hour=16, minute=0, second=0, microsecond=0)
+    pre_market = now.replace(hour=4, minute=0, second=0, microsecond=0)
+
+    holidays_2026 = [(1, 1), (1, 19), (2, 16), (4, 3), (5, 25), (6, 19), (7, 3), (9, 7), (11, 26), (12, 25)]
+    is_holiday = (now.month, now.day) in holidays_2026
+
+    if now.weekday() >= 5 or is_holiday:
+        status = "CLOSED" if now.weekday() >= 5 else "HOLIDAY"
+        color = "#ff4b4b"
+        countdown = "Weekend" if now.weekday() >= 5 else "Holiday"
+        next_event = "Tuesday 09:30 ET" if is_holiday and now.weekday() == 0 else "Monday 09:30 ET"
+        progress = 0
+    elif now < pre_market:
+        status = "CLOSED"
+        color = "#ff4b4b"
+        countdown = f"Pre-market in {str(pre_market - now)[:8]}"
+        next_event = "04:00 ET"
+        progress = 0
+    elif now < market_open:
+        status = "PRE-MARKET"
+        color = "#FFD700"
+        countdown = f"Opens in {str(market_open - now)[:8]}"
+        next_event = "09:30 ET"
+        progress = 0
+    elif market_open <= now <= market_close:
+        status = "OPEN"
+        color = "#00FF00"
+        countdown = f"Closes in {str(market_close - now)[:8]}"
+        next_event = "16:00 ET"
+        progress = (now - market_open) / (market_close - market_open)
+    else:
+        status = "CLOSED"
+        color = "#ff4b4b"
+        countdown = "Opens tomorrow"
+        next_event = "09:30 ET"
+        progress = 0
+
+    return {
+        'time': now.strftime('%I:%M:%S %p'),
+        'status': status,
+        'color': color,
+        'countdown': countdown,
+        'next_event': next_event,
+        'progress': progress,
+        'is_open': status == "OPEN",
+        'is_holiday': is_holiday
+    }
+
+def get_market_context() -> Dict[str, Any]:
+    cache_key = "market_ctx"
+    cached = market_context_cache.get(cache_key, 300)
+    if cached:
+        return cached
+    
+    try:
+        time.sleep(1)
+        spy = yf.Ticker("SPY")
+        spy_data = spy.history(period="5d")
+        if len(spy_data) < 2:
+            result = {'risk_off': False, 'spy_change': 0, 'market_closed': True}
+            market_context_cache.set(cache_key, result)
+            return result
+        
+        spy_change = (spy_data['Close'].iloc[-1] - spy_data['Close'].iloc[-2]) / spy_data['Close'].iloc[-2]
+        
+        vix_level = 20
+        if abs(spy_change) > 0.01:
+            try:
+                time.sleep(0.5)
+                vix = yf.Ticker("^VIX")
+                vix_data = vix.history(period="2d")
+                vix_level = vix_data['Close'].iloc[-1] if not vix_data.empty else 20
+            except:
+                pass
+        
+        risk_off = (spy_change < -0.02) or (vix_level > 30)
+        result = {
+            'risk_off': risk_off, 
+            'spy_change': spy_change, 
+            'vix_level': vix_level, 
+            'market_closed': False
+        }
+        market_context_cache.set(cache_key, result)
+        return result
+        
+    except Exception as e:
+        logger.error(f"Fehler beim Marktkontext: {e}")
+        result = {'risk_off': False, 'spy_change': 0, 'vix_level': 20, 'market_closed': True}
+        market_context_cache.set(cache_key, result)
+        return result
+
+# ============================== Top Movers Functions ==============================
+
+def fetch_yahoo_movers() -> Tuple[Dict[str, List[str]], str]:
+    cache_key = "yahoo_movers"
+    cached = movers_cache.get(cache_key, 3600)
+    if cached:
+        return cached, 'cache'
+    
+    movers = {'gainers': [], 'losers': [], 'most_active': []}
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+    }
+    
+    urls = {
+        'gainers': 'https://finance.yahoo.com/gainers',
+        'losers': 'https://finance.yahoo.com/losers',
+        'most_active': 'https://finance.yahoo.com/most-active'
+    }
+    
+    success_count = 0
+    
+    for category, url in urls.items():
+        try:
+            time.sleep(2)
+            response = requests.get(url, headers=headers, timeout=15)
+            if response.status_code == 200:
+                try:
+                    tables = pd.read_html(StringIO(response.text))
+                    if tables and len(tables) > 0:
+                        df = tables[0]
+                        if 'Symbol' in df.columns:
+                            symbols = df['Symbol'].head(15).tolist()
+                            symbols = [s for s in symbols if isinstance(s, str) and len(s) <= 5 and s.isalpha()]
+                            movers[category] = symbols[:10]
+                            success_count += 1
+                            logger.info(f"{category}: {len(symbols)} Symbole geladen")
+                except Exception as parse_error:
+                    logger.error(f"Parsing Fehler {category}: {parse_error}")
+                    continue
+        except Exception as e:
+            logger.error(f"Fehler beim Laden {category}: {e}")
+            continue
+    
+    if success_count >= 2:
+        movers_cache.set(cache_key, movers)
+        return movers, 'yahoo'
+    else:
+        logger.warning("Verwende Fallback Movers")
+        return FALLBACK_MOVERS, 'fallback'
+
+def get_combined_universe(force_refresh: bool = False) -> Tuple[Set[str], str]:
+    last_check = st.session_state.get('last_movers_check', 0)
+    now = time.time()
+    
+    if force_refresh or (now - last_check >= AUTO_REFRESH_INTERVAL):
+        st.session_state['last_movers_check'] = now
+        
+        movers, source = fetch_yahoo_movers()
+        st.session_state['top_movers_cache'] = movers
+        st.session_state['movers_source'] = source
+        
+        combined = set(st.session_state['watchlist'])
+        for category, symbols in movers.items():
+            combined.update(symbols)
+        
+        st.session_state['combined_universe'] = combined
+        logger.info(f"Universum aktualisiert: {len(combined)} Symbole (Source: {source})")
+        return combined, source
+    
+    return st.session_state['combined_universe'], st.session_state.get('movers_source', 'fallback')
+
+def get_symbol_source(symbol: str) -> SourceType:
+    if symbol in st.session_state['watchlist']:
+        return SourceType.WATCHLIST
+    movers = st.session_state.get('top_movers_cache', {})
+    if symbol in movers.get('gainers', []):
+        return SourceType.GAINERS
+    if symbol in movers.get('losers', []):
+        return SourceType.LOSERS
+    if symbol in movers.get('most_active', []):
+        return SourceType.MOST_ACTIVE
+    return SourceType.UNKNOWN
+
+# ============================== News Functions ==============================
+
+def get_finnhub_news_smart(symbol: str) -> Tuple[Optional[List[Dict]], bool]:
+    cache_key = f"news_{symbol}"
+    cached = news_cache.get(cache_key, 3600)
+    if cached:
+        stats = st.session_state.get('api_stats', {})
+        if isinstance(stats, dict):
+            stats['cache_hits'] = stats.get('cache_hits', 0) + 1
+            st.session_state['api_stats'] = stats
+        return cached, True
+    
+    if not FINNHUB_API_KEY or len(FINNHUB_API_KEY) < 10:
+        return None, False
+    
+    if not finnhub_limiter.can_call():
+        return None, False
+    
+    try:
+        url = f"https://finnhub.io/api/v1/company-news"
+        params = {
+            'symbol': symbol,
+            'from': (datetime.now() - timedelta(days=7)).strftime('%Y-%m-%d'),
+            'to': datetime.now().strftime('%Y-%m-%d'),
+            'token': FINNHUB_API_KEY
+        }
+        response = safe_requests_get(url, params, timeout=10)
+        if response:
+            data = response.json()
+            finnhub_limiter.record_call()
+            stats = st.session_state.get('api_stats', {})
+            if isinstance(stats, dict):
+                stats['finnhub'] = stats.get('finnhub', 0) + 1
+                st.session_state['api_stats'] = stats
+            
+            if isinstance(data, list) and len(data) > 0:
+                sorted_news = sorted(data, key=lambda x: x.get('datetime', 0), reverse=True)[:5]
+                formatted_news = []
+                for item in sorted_news:
+                    formatted_news.append({
+                        'title': item.get('headline', 'No Title'),
+                        'url': item.get('url', ''),
+                        'source': item.get('source', 'Finnhub'),
+                        'datetime': item.get('datetime', 0),
+                        'score': 10
+                    })
+                news_cache.set(cache_key, formatted_news)
+                return formatted_news, False
+    except Exception as e:
+        logger.error(f"Finnhub Fehler für {symbol}: {e}")
+    
+    return None, False
+
+def analyze_news_tiered(symbol: str, tier: int, score: int) -> Tuple[List[Dict], List[str], bool]:
+    if tier <= 20 or score > 60:
+        news, cached = get_finnhub_news_smart(symbol)
+        if news:
+            sources = ['FH']
+            bullish_kws = ['bullish', 'upgrade', 'beat', 'growth', 'positive', 'strong', 'zulassung', 'übernahmeangebot', 'quartalszahlen']
+            bearish_kws = ['bearish', 'downgrade', 'miss', 'loss', 'negative', 'weak']
+            
+            for item in news[:1]:
+                title_lower = item['title'].lower()
+                if any(word in title_lower for word in bullish_kws):
+                    item['score'] = 15
+                elif any(word in title_lower for word in bearish_kws):
+                    item['score'] = 5
+            return news, sources, cached
+    
+    return [], [], False
+
+# ============================== Analyse Funktionen ==============================
+
+def analyze_structure(df: Optional[pd.DataFrame], symbol: Optional[str] = None) -> Dict[str, Any]:
+    if df is None or not isinstance(df, pd.DataFrame) or df.empty:
+        return _default_structure_result()
+    required_cols = ['High', 'Low', 'Close']
+    for col in required_cols:
+        if col not in df.columns:
+            return _default_structure_result()
+    if len(df) < 10:
+        return _default_structure_result()
+    df_clean = df[['High', 'Low', 'Close']].dropna()
+    if len(df_clean) < 10:
+        return _default_structure_result()
+    if symbol:
+        cache_key = f"structure_{symbol}"
+        cached = structure_cache.get(cache_key, 300)
+        if cached:
+            return cached
+    try:
         highs = df_clean['High'].values
         lows = df_clean['Low'].values
-        
-        # Vectorized Swing Detection
-        swing_highs = TechnicalAnalyzer._find_swings(highs, is_high=True)
-        swing_lows = TechnicalAnalyzer._find_swings(lows, is_high=False)
-        
+        swing_highs = []
+        swing_lows = []
+        for i in range(2, len(highs)-2):
+            if not all(np.isfinite([highs[i], highs[i-1], highs[i-2], highs[i+1], highs[i+2]])):
+                continue
+            if (highs[i] > highs[i-1] and highs[i] > highs[i-2] and 
+                highs[i] > highs[i+1] and highs[i] > highs[i+2]):
+                swing_highs.append((i, float(highs[i])))
+            if not all(np.isfinite([lows[i], lows[i-1], lows[i-2], lows[i+1], lows[i+2]])):
+                continue
+            if (lows[i] < lows[i-1] and lows[i] < lows[i-2] and 
+                lows[i] < lows[i+1] and lows[i] < lows[i+2]):
+                swing_lows.append((i, float(lows[i])))
         if len(swing_highs) >= 2 and len(swing_lows) >= 2:
             hh = swing_highs[-1][1] > swing_highs[-2][1]
             hl = swing_lows[-1][1] > swing_lows[-2][1]
-            
-            # Trend Slope Berechnung
-            slope = TechnicalAnalyzer._calculate_slope(swing_highs)
-            
-            return {
+            slope = 0.0
+            if len(swing_highs) >= 3:
+                x = [float(swing_highs[-3][0]), float(swing_highs[-2][0]), float(swing_highs[-1][0])]
+                y = [float(swing_highs[-3][1]), float(swing_highs[-2][1]), float(swing_highs[-1][1])]
+                if all(np.isfinite(val) for val in x + y):
+                    n = len(x)
+                    x_mean = sum(x) / n
+                    y_mean = sum(y) / n
+                    numerator = sum((x[i] - x_mean) * (y[i] - y_mean) for i in range(n))
+                    denominator = sum((x[i] - x_mean) ** 2 for i in range(n))
+                    if denominator != 0 and np.isfinite(denominator):
+                        slope = numerator / denominator
+            result = {
                 'higher_highs': bool(hh),
                 'higher_lows': bool(hl),
-                'trend_slope': float(slope),
+                'trend_slope': float(slope) if np.isfinite(slope) else 0.0,
                 'structure_intact': bool(hh and hl),
                 'last_swing_low': float(swing_lows[-1][1]),
                 'last_swing_high': float(swing_highs[-1][1])
             }
-        
-        return TechnicalAnalyzer._default_result(df_clean)
-    
-    @staticmethod
-    def _find_swings(data: np.ndarray, is_high: bool) -> List[Tuple[int, float]]:
-        """Vectorized Swing Point Detection"""
-        # Rolling window comparison
-        swings = []
-        for i in range(2, len(data)-2):
-            window = data[i-2:i+3]
-            if is_high:
-                if data[i] == np.max(window) and data[i] > data[i-1]:
-                    swings.append((i, float(data[i])))
-            else:
-                if data[i] == np.min(window) and data[i] < data[i-1]:
-                    swings.append((i, float(data[i])))
-        return swings
-    
-    @staticmethod
-    def _calculate_slope(swings: List[Tuple[int, float]]) -> float:
-        """Lineare Regression für Trend-Slope"""
-        if len(swings) < 3:
-            return 0.0
-        
-        x = np.array([s[0] for s in swings[-3:]])
-        y = np.array([s[1] for s in swings[-3:]])
-        
-        # NumPy polyfit für OLS
-        if len(x) == len(y) and len(x) > 0:
+        else:
+            result = _default_structure_result(df_clean)
+        if symbol:
+            structure_cache.set(cache_key, result)
+        return result
+    except:
+        return _default_structure_result()
+
+def _default_structure_result(df: Optional[pd.DataFrame] = None) -> Dict[str, Any]:
+    if df is not None and not df.empty and 'Low' in df.columns and 'High' in df.columns:
+        try:
+            last_low = float(df['Low'].tail(5).min()) if len(df['Low']) > 0 else 0.0
+            last_high = float(df['High'].tail(20).max()) if len(df['High']) > 0 else 0.0
+            return {
+                'structure_intact': False,
+                'higher_highs': False,
+                'higher_lows': False,
+                'trend_slope': 0.0,
+                'last_swing_low': last_low,
+                'last_swing_high': last_high
+            }
+        except:
+            pass
+    return {
+        'structure_intact': False,
+        'higher_highs': False,
+        'higher_lows': False,
+        'trend_slope': 0.0,
+        'last_swing_low': 0.0,
+        'last_swing_high': 0.0
+    }
+
+# ============================== Alpha Vantage Smart Fetch ==============================
+
+def get_alpha_vantage_smart(symbol: str) -> Tuple[Optional[Dict], bool]:
+    cache_key = f"av_fund_{symbol}"
+    cached = fundamentals_cache.get(cache_key, 3600)
+    if cached:
+        stats = st.session_state.get('api_stats', {})
+        if isinstance(stats, dict):
+            stats['cache_hits'] = stats.get('cache_hits', 0) + 1
+            st.session_state['api_stats'] = stats
+        return cached, True
+    if not alpha_manager.keys:
+        return None, False
+    attempts = 0
+    max_attempts = len(alpha_manager.keys)
+    while attempts < max_attempts:
+        if alpha_manager.can_call():
+            current_key = alpha_manager.get_current_key()
+            if not current_key:
+                break
+            url = "https://www.alphavantage.co/query"
+            params = {
+                'function': 'OVERVIEW',
+                'symbol': symbol,
+                'apikey': current_key
+            }
             try:
-                slope, _ = np.polyfit(x, y, 1)
-                return float(slope) if np.isfinite(slope) else 0.0
+                response = safe_requests_get(url, params, timeout=15)
+                if response:
+                    data = response.json()
+                    if 'Note' in data or 'Information' in data:
+                        alpha_manager.limiters[alpha_manager.current_index]['exhausted'] = True
+                        alpha_manager.rotate_key()
+                        attempts += 1
+                        time.sleep(1)
+                        continue
+                    if 'Error Message' in data:
+                        return None, False
+                    if 'Symbol' in data and data['Symbol']:
+                        result = {
+                            'pe_ratio': float(data.get('PERatio', 0)) if data.get('PERatio') and data.get('PERatio') not in ['None', '0'] else None,
+                            'sector': data.get('Sector', ''),
+                            'industry': data.get('Industry', ''),
+                            'market_cap': int(float(data.get('MarketCapitalization', 0))) if data.get('MarketCapitalization') and data.get('MarketCapitalization') not in ['None', '0'] else 0
+                        }
+                        fundamentals_cache.set(cache_key, result)
+                        alpha_manager.record_call()
+                        return result, False
+                    else:
+                        return None, False
+                else:
+                    alpha_manager.rotate_key()
+                    attempts += 1
+                    time.sleep(0.5)
             except:
-                pass
-        return 0.0
-    
-    @staticmethod
-    def _default_result(df: Optional[pd.DataFrame] = None) -> Dict[str, Any]:
-        if df is not None and not df.empty:
-            try:
-                return {
-                    'structure_intact': False,
-                    'higher_highs': False,
-                    'higher_lows': False,
-                    'trend_slope': 0.0,
-                    'last_swing_low': float(df['Low'].tail(5).min()),
-                    'last_swing_high': float(df['High'].tail(20).max())
-                }
-            except:
-                pass
-        return {
-            'structure_intact': False, 'higher_highs': False,
-            'higher_lows': False, 'trend_slope': 0.0,
-            'last_swing_low': 0.0, 'last_swing_high': 0.0
-        }
+                alpha_manager.rotate_key()
+                attempts += 1
+                time.sleep(0.5)
+        else:
+            alpha_manager.rotate_key()
+            attempts += 1
+    return None, False
 
-class ScoringEngine:
-    """Berechnung des Setup-Scores mit dokumentierten Gewichtungen"""
-    
-    # Magic Numbers als Klassenkonstanten dokumentiert
-    BASE_SCORE: int = 25
-    STRUCTURE_STRONG: int = 15  # HH + HL
-    STRUCTURE_WEAK: int = 10    # Nur HL
-    TREND_SLOPE_BONUS: int = 5  # Slope > 0.005
-    VOLUME_HIGH: int = 20         # RVOL > 2.0
-    VOLUME_MED: int = 10          # RVOL > 1.0
-    SUPPORT_CLOSE: int = 15       # < 3% zu Swing Low
-    SUPPORT_MED: int = 8          # < 8% zu Swing Low
-    PE_LOW: int = 8               # PE < 15
-    PE_HIGH_PENALTY: int = -5     # PE > 100
-    
-    @classmethod
-    def calculate(cls, 
-                  structure: Dict[str, Any],
-                  volume_metrics: Dict[str, float],
-                  fundamentals: Optional[Dict] = None,
-                  news_score: int = 0) -> Tuple[int, List[str]]:
-        """Berechnet Score mit Begründungen"""
-        score = cls.BASE_SCORE
-        reasons: List[str] = []
-        
-        # Struktur
-        if structure.get('structure_intact'):
-            score += cls.STRUCTURE_STRONG
-            reasons.append("📈 Trend stark")
-        elif structure.get('higher_lows'):
-            score += cls.STRUCTURE_WEAK
-            reasons.append("📈 Trend schwach")
-        
-        # Trend-Slope
-        slope = structure.get('trend_slope', 0)
-        if slope > 0.005:
-            score += cls.TREND_SLOPE_BONUS
-        
-        # Volumen
-        rvol = volume_metrics.get('rvol', 1.0)
-        if rvol > 2.0:
-            score += cls.VOLUME_HIGH
-            reasons.append(f"⚡ Vol {rvol:.1f}x")
-        elif rvol > 1.0:
-            score += cls.VOLUME_MED
-            reasons.append(f"⚡ Vol {rvol:.1f}x")
-        
-        # Support-Distanz
-        support_dist = volume_metrics.get('support_dist', 1.0)
-        if support_dist < 0.03:
-            score += cls.SUPPORT_CLOSE
-            reasons.append("🎯 Support nah")
-        elif support_dist < 0.08:
-            score += cls.SUPPORT_MED
-        
-        # Fundamentals
-        if fundamentals:
-            pe = fundamentals.get('pe_ratio')
-            if pe is not None:
-                if pe < 15:
-                    score += cls.PE_LOW
-                    reasons.append(f"💰 PE {pe:.1f}")
-                elif pe > 100:
-                    score += cls.PE_HIGH_PENALTY
-        
-        # News
-        score += news_score
-        
-        return min(100, score), reasons
+# ============================== Gemini AI Integration ==============================
 
-# ============================== Async Scanner ==============================
-
-class AsyncBullScanner:
-    """Haupt-Scanner mit Async Processing und strikten Rate-Limits"""
+def get_gemini_entry_analysis(item_data: dict) -> str:
+    """Fragt die Gemini API nach einer konkreten Einstiegseinschätzung."""
     
-    def __init__(self, 
-                 watchlist: List[str],
-                 finnhub_key: Optional[str] = None,
-                 alpha_keys: Optional[List[str]] = None):
-        self.watchlist = watchlist
-        self.yahoo_client = YahooFinanceClient()
-        self.finnhub_client = FinnhubClient(finnhub_key) if finnhub_key else None
-        self.analyzer = TechnicalAnalyzer()
-        self.scorer = ScoringEngine()
+    if "gemini" not in st.secrets or "api_key" not in st.secrets["gemini"]:
+        return "⚠️ Gemini API-Key fehlt in den Secrets. Bitte eintragen."
         
-    async def scan_symbol(self, 
-                         symbol: str, 
-                         tier: int,
-                         market_ctx: MarketContext) -> Optional[ScanResult]:
-        """Analysiert ein einzelnes Symbol mit allen Checks"""
+    genai.configure(api_key=st.secrets["gemini"]["api_key"])
+    
+    model = genai.GenerativeModel('gemini-1.5-flash')
+    
+    prompt = f"""
+    Du bist ein professioneller Daytrader. Analysiere folgendes Setup für einen kurzfristigen Long-Einstieg:
+    Ticker: {item_data['symbol']}
+    Preis: ${item_data['price']:.2f}
+    Pullback: -{item_data['pullback_pct']*100:.1f}% vom Hoch
+    Geplanter Stop Loss: ${item_data['stop_loss']:.2f}
+    Geplantes Target: ${item_data['target']:.2f}
+    Rel. Volumen (RVol): {item_data['rvol']:.1f}x
+    News Catalyst: {item_data.get('news', [{{}}])[0].get('title', 'Keine relevanten News')}
+
+    Gib mir eine extrem präzise Einschätzung (max. 3 Sätze): 
+    1. Wie bewertest du das CRV (R:R) und die Volatilität?
+    2. Wo liegt der optimale Einstiegspunkt (Entry-Trigger) heute?
+    """
+    
+    try:
+        response = model.generate_content(prompt)
+        return response.text.strip()
+    except Exception as e:
+        return f"❌ Gemini API Fehler: {str(e)}"
+
+# ============================== ThreadPool Scanner ==============================
+
+class ThreadPoolBullScanner:
+    """
+    ThreadPool-basierter Scanner mit Rate-Limiting
+    4 Worker × 1s Delay = effektiv 4 Calls/s (sicher für Yahoo)
+    """
+    
+    def __init__(self, max_workers: int = 4, min_delay: float = 1.0):
+        self.max_workers = max_workers
+        self.min_delay = min_delay
+        self._yahoo_lock = threading.Lock()
+        self._last_yahoo_call = 0.0
+        self._yahoo_cache = SmartCache()
         
-        # Yahoo Daten
-        df = await self.yahoo_client.fetch_history(symbol)
-        if df is None or len(df) < 15:
+    def _fetch_yahoo_with_rate_limit(self, symbol: str) -> Optional[pd.DataFrame]:
+        """Thread-sicheres Yahoo Fetching mit Rate-Limiting"""
+        cache_key = f"yh_{symbol}"
+        cached = self._yahoo_cache.get(cache_key, 300)
+        if cached is not None:
+            return cached
+        
+        with self._yahoo_lock:
+            now = time.time()
+            time_since_last = now - self._last_yahoo_call
+            if time_since_last < self.min_delay:
+                sleep_time = self.min_delay - time_since_last
+                time.sleep(sleep_time)
+            self._last_yahoo_call = time.time()
+        
+        try:
+            df = yf.Ticker(symbol).history(period='3mo', interval='1d')
+            stats = st.session_state.get('api_stats', {})
+            stats['yahoo'] = stats.get('yahoo', 0) + 1
+            st.session_state['api_stats'] = stats
+            
+            if not df.empty:
+                self._yahoo_cache.set(cache_key, df)
+                return df
+        except Exception as e:
+            logger.error(f"Yahoo Fehler für {symbol}: {e}")
+            
+        return None
+    
+    def analyze_single_symbol(self, symbol: str, tier: int, total: int) -> Optional[Dict[str, Any]]:
+        """Analysiert ein einzelnes Symbol"""
+        debug_info = {'symbol': symbol, 'tier': tier, 'errors': [], 'checks': {}}
+        
+        if tier > 30:
+            time.sleep(0.5)
+        if tier > 60:
+            time.sleep(1.0)
+        
+        df = self._fetch_yahoo_with_rate_limit(symbol)
+        if df is None or df.empty:
+            debug_info['errors'].append("Yahoo Fehler")
+            _log_scan_debug(debug_info)
+            return None
+        if len(df) < 15:
+            debug_info['errors'].append(f"Zu wenig Daten: {len(df)}")
+            _log_scan_debug(debug_info)
             return None
         
         df_clean = df.dropna()
         if len(df_clean) < 10:
+            debug_info['errors'].append("Zu wenig gültige Daten")
+            _log_scan_debug(debug_info)
             return None
         
         current_price = float(df_clean['Close'].iloc[-1])
         if not np.isfinite(current_price) or current_price <= 0:
+            debug_info['errors'].append("Ungültiger Preis")
+            _log_scan_debug(debug_info)
             return None
         
-        # Pullback Berechnung
-        lookback = min(60, len(df_clean) - 5)
+        lookback = min(60, len(df_clean)-5)
         recent = df_clean.tail(lookback)
         recent_high = float(recent['High'].max())
+        if not np.isfinite(recent_high) or recent_high <= 0:
+            debug_info['errors'].append("Kein High")
+            _log_scan_debug(debug_info)
+            return None
         
         pullback_pct = (recent_high - current_price) / recent_high
-        if not (0.05 <= pullback_pct <= 0.50):
+        if pullback_pct < MIN_PULLBACK_PERCENT or pullback_pct > MAX_PULLBACK_PERCENT:
+            debug_info['errors'].append(f"Pullback {pullback_pct:.2%} außerhalb Grenzen")
+            _log_scan_debug(debug_info)
             return None
         
-        # Technische Analyse
-        structure = self.analyzer.analyze_structure(df_clean, symbol)
+        structure = analyze_structure(df_clean, symbol)
+        debug_info['checks']['structure'] = structure.get('structure_intact', False)
+        debug_info['checks']['higher_lows'] = structure.get('higher_lows', False)
         
-        if not structure['structure_intact'] and not structure['higher_lows']:
+        if not structure.get('structure_intact', False) and not structure.get('higher_lows', False):
+            debug_info['errors'].append("Kein bullischer Trend")
+            _log_scan_debug(debug_info)
             return None
         
-        last_swing_low = structure.get('last_swing_low', 0)
+        last_swing_low = structure.get('last_swing_low')
+        if last_swing_low is None or not np.isfinite(last_swing_low) or last_swing_low <= 0:
+            debug_info['errors'].append("Kein Swing Low")
+            _log_scan_debug(debug_info)
+            return None
+        
         if current_price < last_swing_low * 0.90:
+            debug_info['errors'].append("Preis zu weit unter Swing Low")
+            _log_scan_debug(debug_info)
             return None
         
-        # Volumen-Metriken
+        score = 25
+        if structure.get('structure_intact', False):
+            score += 15
+        elif structure.get('higher_lows', False):
+            score += 10
+        
+        trend_slope = structure.get('trend_slope', 0)
+        if trend_slope is not None and np.isfinite(trend_slope) and trend_slope > 0.005:
+            score += 5
+        
         avg_vol = df_clean['Volume'].mean()
         current_vol = df_clean['Volume'].iloc[-1]
         rvol = current_vol / avg_vol if avg_vol > 0 else 1.0
+        if rvol > 2:
+            score += 20
+        elif rvol > 1.0:
+            score += 10
         
-        support_dist = (current_price - last_swing_low) / current_price
+        support_dist = (current_price - last_swing_low) / current_price if current_price > 0 else 1.0
+        if support_dist < 0.03:
+            score += 15
+        elif support_dist < 0.08:
+            score += 8
         
-        # News (nur für Top-Tiers)
-        news, news_score = [], 0
-        if tier <= 20 and self.finnhub_client:
-            news_data, _ = await self.finnhub_client.get_news(symbol)
-            if news_data:
-                news = news_data
-                news_score = news[0].get('score', 10)
+        news, sources, cached_news = analyze_news_tiered(symbol, tier, score)
+        if news:
+            score += news[0]['score']
         
-        # Scoring
-        volume_metrics = {'rvol': rvol, 'support_dist': support_dist}
-        score, reasons = self.scorer.calculate(structure, volume_metrics, None, news_score)
+        fundamentals, fund_cached = None, False
+        if score > 55 and tier <= 10:
+            fundamentals, fund_cached = get_alpha_vantage_smart(symbol)
         
-        if score < 60:
-            return None
+        pe_ratio = None
+        if fundamentals:
+            pe_ratio = fundamentals.get('pe_ratio')
+            if pe_ratio is not None and np.isfinite(pe_ratio):
+                if pe_ratio < 15:
+                    score += 8
+                elif pe_ratio > 100:
+                    score -= 5
         
-        # R:R Kalkulation
-        atr = float((df_clean['High'].rolling(14).max() - df_clean['Low'].rolling(14).min()).mean())
-        if not np.isfinite(atr) or atr <= 0:
+        try:
+            atr = float((df_clean['High'].rolling(14).max() - df_clean['Low'].rolling(14).min()).mean())
+            if not np.isfinite(atr) or atr <= 0:
+                atr = current_price * 0.02
+        except:
             atr = current_price * 0.02
         
-        stop_loss = max(last_swing_low * 0.97, current_price - (2 * atr))
-        target = min(recent_high * 0.97, current_price + (current_price - stop_loss) * 2)
-        rr_ratio = (target - current_price) / (current_price - stop_loss) if (current_price - stop_loss) > 0 else 0
-        
-        if rr_ratio < 1.0:
+        stop_loss = max(last_swing_low * 0.97, current_price - (2*atr))
+        target = min(recent_high * 0.97, current_price + (current_price - stop_loss)*2)
+        if stop_loss <= 0 or stop_loss >= current_price or target <= current_price:
+            debug_info['errors'].append("Ungültige SL/TP")
+            _log_scan_debug(debug_info)
             return None
         
-        return ScanResult(
-            symbol=symbol,
-            tier=tier,
-            score=score,
-            price=current_price,
-            pullback_pct=pullback_pct,
-            recent_high=recent_high,
-            stop_loss=stop_loss,
-            target=target,
-            rr_ratio=rr_ratio,
-            rvol=rvol,
-            reasons=reasons,
-            news=news,
-            source=SourceType.WATCHLIST if symbol in self.watchlist else SourceType.UNKNOWN
-        )
+        rr_ratio = (target - current_price) / (current_price - stop_loss) if (current_price - stop_loss) > 0 else 0
+        if rr_ratio < 1.0:
+            debug_info['errors'].append(f"R:R {rr_ratio:.2f} zu niedrig")
+            _log_scan_debug(debug_info)
+            return None
+        
+        if score < MIN_SCORE_THRESHOLD:
+            debug_info['errors'].append(f"Score {score} < {MIN_SCORE_THRESHOLD} (Threshold)")
+            _log_scan_debug(debug_info)
+            return None
+        
+        reasons = [f"📉 -{pullback_pct:.1%}"]
+        if structure.get('structure_intact', False):
+            reasons.append("📈 Trend stark")
+        elif structure.get('higher_lows', False):
+            reasons.append("📈 Trend schwach")
+        if rvol > 1.0:
+            reasons.append(f"⚡ Vol {rvol:.1f}x")
+        if support_dist < 0.03:
+            reasons.append("🎯 Support nah")
+        if news:
+            reasons.append(f"📰 {news[0]['source']}")
+        if pe_ratio is not None:
+            reasons.append(f"{'💰' if pe_ratio<15 else '📊'} PE {pe_ratio:.1f}")
+        
+        source = get_symbol_source(symbol)
+        
+        return {
+            'symbol': symbol,
+            'tier': tier,
+            'score': min(100, int(score)),
+            'price': current_price,
+            'pullback_pct': pullback_pct,
+            'recent_high': recent_high,
+            'stop_loss': stop_loss,
+            'target': target,
+            'rr_ratio': rr_ratio,
+            'rvol': rvol,
+            'reasons': reasons,
+            'news': news,
+            'pe_ratio': pe_ratio,
+            'api_sources': list(set([s for s in sources] + (['AV'] if fundamentals else []))),
+            'from_cache': cached_news or fund_cached,
+            'source': source
+        }
     
-    async def scan_batch(self,
-                        symbols: List[Tuple[str, SourceType]],
-                        market_ctx: MarketContext,
-                        progress_callback: Optional[Callable[[int, int], None]] = None) -> List[ScanResult]:
-        """Batch-Scan mit Rate-Limiting und Progress"""
-        results: List[ScanResult] = []
-        
-        # Verarbeite in Chunks um Memory-Pressure zu vermeiden
-        chunk_size = 10
-        
-        for chunk_start in range(0, len(symbols), chunk_size):
-            chunk = symbols[chunk_start:chunk_start + chunk_size]
-            
-            # Erstelle Tasks für diesen Chunk
-            tasks = []
-            for i, (sym, source) in enumerate(chunk):
-                tier = chunk_start + i + 1
-                task = self.scan_symbol(sym, tier, market_ctx)
-                tasks.append(task)
-            
-            # Führe Chunk aus mit begrenzter Parallelität
-            chunk_results = await asyncio.gather(*tasks, return_exceptions=True)
-            
-            for res in chunk_results:
-                if isinstance(res, ScanResult):
-                    results.append(res)
-                # Ignoriere Exceptions für einzelne Symbole
-            
-            # Progress Update
-            if progress_callback:
-                progress_callback(min(chunk_start + chunk_size, len(symbols)), len(symbols))
-            
-            # Rate Limiting Pause zwischen Chunks
-            if chunk_start + chunk_size < len(symbols):
-                await asyncio.sleep(2)  # Respektiere Yahoo Limits
-        
-        return results
-
-# ============================== Unit Tests ==============================
-
-class TestRateLimiter:
-    """Tests für Rate Limiting Logik"""
-    
-    @pytest.mark.asyncio
-    async def test_yahoo_rate_limit(self):
-        """Test: Max 0.8 Calls/s = min 1.25s Delay"""
-        limiter = AsyncRateLimiter(RateLimitConfig(calls_per_second=0.8, burst_size=2))
-        
-        start = time.time()
-        async with limiter:
-            pass
-        async with limiter:
-            pass
-        elapsed = time.time() - start
-        
-        assert elapsed >= 1.25, f"Delay zu kurz: {elapsed:.2f}s"
-    
-    @pytest.mark.asyncio
-    async def test_finnhub_minute_limit(self):
-        """Test: Max 60 Calls/Minute"""
-        limiter = AsyncRateLimiter(RateLimitConfig(calls_per_minute=60))
-        
+    def scan_batch(self, symbols: List[Tuple[str, SourceType]], progress_callback=None) -> List[Dict]:
+        """Haupt-Scan mit ThreadPool"""
+        results = []
+        completed = 0
+        error_count = 0
         success_count = 0
-        for _ in range(65):
-            if await limiter.acquire():
-                success_count += 1
         
-        assert success_count == 60, f"Erwartet 60, got {success_count}"
-    
-    def test_scoring_weights(self):
-        """Validiert Magic Numbers im Scoring"""
-        # Test: Basis + Struktur stark = 40
-        structure = {'structure_intact': True, 'higher_lows': True, 'trend_slope': 0}
-        vol = {'rvol': 1.0, 'support_dist': 1.0}
-        
-        score, _ = ScoringEngine.calculate(structure, vol)
-        assert score == 40, f"Erwartet 40, got {score}"  # 25 + 15
-        
-        # Test: Vol Bonus
-        vol = {'rvol': 2.5, 'support_dist': 1.0}
-        score, _ = ScoringEngine.calculate(structure, vol)
-        assert score == 60, f"Erwartet 60, got {score}"  # 40 + 20
-
-class TestTechnicalAnalysis:
-    """Tests für technische Indikatoren"""
-    
-    def test_swing_detection(self):
-        """Test: Swing Highs/Lows Erkennung"""
-        # Erstelle Test-Daten mit klaren Swings
-        highs = np.array([10, 11, 12, 11, 10, 11, 13, 12, 11, 12, 14, 13])
-        lows = np.array([8, 9, 8, 7, 8, 9, 8, 9, 8, 9, 8, 9])
-        
-        df = pd.DataFrame({
-            'High': highs,
-            'Low': lows,
-            'Close': (highs + lows) / 2
-        })
-        
-        result = TechnicalAnalyzer.analyze_structure(df)
-        
-        assert result['structure_intact'] or result['higher_lows'], "Sollte Trend erkennen"
-        assert result['last_swing_low'] > 0, "Sollte Swing Low haben"
-        assert result['last_swing_high'] > 0, "Sollte Swing High haben"
-    
-    def test_trend_slope_calculation(self):
-        """Test: Trend-Slope Berechnung"""
-        # Steigender Trend
-        swings = [(0, 100.0), (10, 110.0), (20, 120.0)]
-        slope = TechnicalAnalyzer._calculate_slope(swings)
-        
-        assert slope > 0, f"Sollte positiver Trend sein, got {slope}"
-        assert abs(slope - 1.0) < 0.1, f"Slope sollte ~1.0 sein, got {slope}"
-
-# ============================== Streamlit UI ==============================
-
-def render_async_ui():
-    """Streamlit UI mit Async Integration"""
-    st.set_page_config(layout="wide", page_title="Elite Bull Scanner Pro V7.0 Async", page_icon="🐂")
-    
-    # CSS Styles (gekürzt für Übersichtlichkeit)
-    st.markdown("""
-    <style>
-    .bull-card { border: 1px solid #333; border-radius: 10px; padding: 15px; 
-                 background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%); }
-    .metric-green { color: #00FF00; font-weight: bold; }
-    .metric-red { color: #ff4b4b; }
-    </style>
-    """, unsafe_allow_html=True)
-    
-    # Session State
-    if 'scanner' not in st.session_state:
-        # API Keys aus Secrets laden
-        try:
-            finnhub_key = st.secrets.get("finnhub", {}).get("api_key")
-        except:
-            finnhub_key = None
+        with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
+            future_to_symbol = {
+                executor.submit(self.analyze_single_symbol, sym, i+1, len(symbols)): (sym, src) 
+                for i, (sym, src) in enumerate(symbols)
+            }
             
-        st.session_state['scanner'] = AsyncBullScanner(
-            watchlist=DEFAULT_WATCHLIST,
-            finnhub_key=finnhub_key
-        )
+            for future in as_completed(future_to_symbol):
+                symbol, source = future_to_symbol[future]
+                try:
+                    result = future.result()
+                    if result:
+                        results.append(result)
+                        success_count += 1
+                    else:
+                        error_count += 1
+                except Exception as e:
+                    logger.error(f"Fehler bei {symbol}: {e}")
+                    error_count += 1
+                
+                completed += 1
+                if progress_callback:
+                    progress_callback(completed, len(symbols), success_count, error_count, symbol, source)
+        
+        return sorted(results, key=lambda x: (x['score'], x['pullback_pct']), reverse=True)
+
+def _log_scan_debug(debug_info: Dict):
+    scan_debug = st.session_state.get('scan_debug', [])
+    scan_debug.append(debug_info)
+    st.session_state['scan_debug'] = scan_debug[-100:]
+
+# ============================== Alert Management ==============================
+
+def should_send_alert(symbol: str, current_price: float, current_score: int) -> bool:
+    sent_alerts = st.session_state.get('sent_alerts', {})
+    now = datetime.now()
+    if symbol not in sent_alerts:
+        return True
+    last_alert = sent_alerts[symbol]
+    time_diff = (now - last_alert['timestamp']).total_seconds() / 60
+    if time_diff < ALERT_COOLDOWN_MINUTES:
+        return False
+    price_change = abs(current_price - last_alert['price']) / last_alert['price']
+    score_change = current_score - last_alert['score']
+    if price_change < 0.02 and score_change < 10:
+        return False
+    return True
+
+def record_alert(symbol: str, price: float, score: int, setup_type: str):
+    st.session_state['sent_alerts'][symbol] = {
+        'timestamp': datetime.now(),
+        'price': price,
+        'score': score,
+        'setup_type': setup_type
+    }
+    st.session_state['alert_history'].append({
+        'timestamp': datetime.now(),
+        'symbol': symbol,
+        'price': price,
+        'score': score,
+        'setup_type': setup_type
+    })
+    st.session_state['alert_history'] = st.session_state['alert_history'][-20:]
+
+# ============================== Telegram Alert ==============================
+
+def send_telegram_alert(symbol: str, price: float, pullback_pct: float, news_item: Optional[Dict], 
+                       setup_type: str, pe_ratio: Optional[float] = None, api_sources: Optional[List] = None, 
+                       tier: Optional[int] = None, source: Optional[SourceType] = None) -> bool:
+    if not TELEGRAM_BOT_TOKEN or len(TELEGRAM_BOT_TOKEN) < 10:
+        return False
+    news_title = news_item.get('title','')[:40] + '...' if news_item else 'Keine News'
+    news_url = news_item.get('url','') if news_item else f'https://finance.yahoo.com/quote/{symbol}'
+    emoji = "🟣" if setup_type == "CATALYST" else "🏆" if setup_type == "GOLD" else "🐂"
     
-    scanner: AsyncBullScanner = st.session_state['scanner']
+    source_emoji = {
+        SourceType.WATCHLIST: '📋',
+        SourceType.GAINERS: '🚀',
+        SourceType.LOSERS: '💎',
+        SourceType.MOST_ACTIVE: '🔥'
+    }.get(source, '📊')
     
-    # Markt-Uhr
+    pe_info = f"\n📊 P/E: {pe_ratio:.1f}" if pe_ratio else ""
+    api_info = f"\n📡 {','.join(api_sources)}" if api_sources else ""
+    tier_info = f"\n🎯 Tier {tier}" if tier else ""
+    source_info = f"\n{source_emoji} Quelle: {source.value if source else 'unknown'}" if source else ""
+    
+    msg = f"""{emoji} <b>{setup_type}: {symbol}</b> {emoji}
+📉 Pullback: <b>-{pullback_pct:.1f}%</b>
+💵 Preis: ${price:.2f}{pe_info}{api_info}{tier_info}{source_info}
+📰 {news_title}
+👉 <a href='{news_url}'>News</a> | <a href='https://www.tradingview.com/chart/?symbol={symbol}'>Chart</a>"""
+    
+    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
+    payload = {"chat_id": TELEGRAM_CHAT_ID, "text": msg, "parse_mode": "HTML", "disable_web_page_preview": True}
+    try:
+        requests.post(url, data=payload, timeout=5).raise_for_status()
+        return True
+    except:
+        return False
+
+# ============================== Karten HTML ==============================
+
+def render_card_html(item: Dict) -> str:
+    sym = item['symbol']
+    price = item['price']
+    pullback = item['pullback_pct']
+    sl = item['stop_loss']
+    target = item['target']
+    rr = item['rr_ratio']
+    rvol = item['rvol']
+    score = item['score']
+    reasons = ' | '.join(item['reasons'][:3])
+    news_item = item.get('news', [{}])[0] if item.get('news') else None
+    news_title = news_item['title'][:40] + '...' if news_item else 'Keine News'
+    news_url = news_item['url'] if news_item else f'https://finance.yahoo.com/quote/{sym}'
+    tv_url = f'https://www.tradingview.com/chart/?symbol={sym}'
+    tier = item.get('tier', '-')
+    source = item.get('source', SourceType.UNKNOWN)
+    apis = item.get('api_sources', [])
+    cached = item.get('from_cache', False)
+    
+    pullback_color = '#ff6b6b' if pullback > 0.15 else '#ffa502'
+    conf_color = '#9933ff' if score > 85 else '#FFD700' if score > 70 else '#00FF00'
+    tier_html = f'<div class="tier-badge">T{tier}</div>'
+    api_html = ''.join([f'<div class="tier-badge">{a}</div>' for a in apis])
+    cache_html = '<div class="cache-badge">CACHE</div>' if cached else ''
+    
+    source_badges = {
+        SourceType.WATCHLIST: '<div class="tier-badge" style="background:#2d5a2d;">📋 WL</div>',
+        SourceType.GAINERS: '<div class="mover-badge">🚀 GAINER</div>',
+        SourceType.LOSERS: '<div class="mover-badge" style="background:linear-gradient(90deg, #4ecdc4, #44a3aa);">💎 DIP</div>',
+        SourceType.MOST_ACTIVE: '<div class="mover-badge" style="background:linear-gradient(90deg, #FFD700, #FFA500);">🔥 ACTIVE</div>'
+    }
+    source_html = source_badges.get(source, '')
+    
+    return f"""
+    <div class="bull-card source-{source.value}">
+        <div style="display:flex; justify-content:space-between; align-items:center;">
+            <h3 style="margin:0;">🐂 {sym}</h3>
+            {source_html}
+        </div>
+        <div class="pullback-badge" style="background: {pullback_color};">-{pullback:.1%}</div>
+        <div style="margin: 5px 0;">{tier_html}{api_html}{cache_html}</div>
+        <div class="price">${price:.2f}</div>
+        <div style="font-size: 0.8rem; color: #aaa; margin: 5px 0;">{reasons}</div>
+        <div style="margin: 8px 0;">
+            <span class="stop-loss">SL: ${sl:.2f}</span>
+            <span class="target">TP: ${target:.2f}</span>
+        </div>
+        <div style="font-size: 0.8rem; color: {conf_color}; margin: 5px 0;">Score: {score}/100</div>
+        <div class="confidence-bar"><div class="confidence-fill" style="width: {score}%; background: {conf_color};"></div></div>
+        <div style="font-size: 0.75rem; color: #888; margin: 5px 0;">R:R {rr:.1f}x | Vol {rvol:.1f}x</div>
+        <a href="{news_url}" target="_blank" class="news-link-btn">📰 {news_title}</a>
+        <a href="{tv_url}" target="_blank" class="btn-link">📈 TradingView</a>
+    </div>
+    """
+
+def render_card(item: Dict, container):
+    html = render_card_html(item)
+    with container:
+        st.markdown(html, unsafe_allow_html=True)
+        
+        # Der Gemini-Button direkt unter der HTML-Karte
+        if st.button(f"🤖 Gemini Einstiegs-Check", key=f"gemini_btn_{item['symbol']}"):
+            with st.spinner(f"Gemini analysiert Orderflow für {item['symbol']}..."):
+                analysis = get_gemini_entry_analysis(item)
+                st.info(analysis, icon="💡")
+
+# ============================== Main UI ==============================
+
+def main():
     clock = get_market_clock()
-    col1, col2, col3 = st.columns([2, 2, 1])
-    with col1:
-        st.markdown(f"### 🕐 {clock['time']} ET")
-    with col2:
-        status_color = "🟢" if clock['is_open'] else "🔴"
-        st.markdown(f"### {status_color} {clock['status']}")
-    
-    # Async Scan Button
-    if st.button('🚀 Async Scan Starten', type="primary"):
-        progress_bar = st.progress(0)
-        status_text = st.empty()
-        results_container = st.container()
+
+    if clock.get('is_holiday'):
+        st.markdown(f"""
+        <div class="holiday-banner">
+            🎌 US MARKET HOLIDAY 🎌<br>
+            <small>Markt ist geschlossen. Daten können unvollständig sein.</small>
+        </div>
+        """, unsafe_allow_html=True)
+
+    st.markdown(f"""
+    <div class="market-clock-container">
+        <div class="market-time">{clock['time']}</div>
+        <div style="margin: 10px 0;">
+            <span class="market-status" style="background: {clock['color']};">{clock['status']}</span>
+        </div>
+        <div class="market-countdown">{clock['countdown']}</div>
+        {f'<div class="market-progress"><div class="market-progress-bar" style="width: {clock["progress"]*100}%;"></div></div>' if clock['is_open'] else ''}
+    </div>
+    """, unsafe_allow_html=True)
+
+    # Automatisches Refresh
+    if st.session_state.get('auto_refresh'):
+        last = st.session_state.get('last_auto_refresh', 0)
+        last_movers = st.session_state.get('last_movers_check', 0)
+        now = time.time()
         
-        async def run_scan():
-            # Bereite Symbol-Liste vor
-            symbols = [(s, SourceType.WATCHLIST) for s in DEFAULT_WATCHLIST]
+        if now - last_movers >= AUTO_REFRESH_INTERVAL:
+            st.session_state['last_movers_check'] = now
+            try:
+                movers, source = fetch_yahoo_movers()
+                st.session_state['top_movers_cache'] = movers
+                st.session_state['movers_source'] = source
+                combined = set(st.session_state['watchlist'])
+                for category, symbols in movers.items():
+                    combined.update(symbols)
+                st.session_state['combined_universe'] = combined
+            except Exception as e:
+                logger.error(f"Fehler beim Movers-Update: {e}")
+        
+        if now - last >= AUTO_REFRESH_INTERVAL:
+            st.session_state['last_auto_refresh'] = now
+            st.session_state['refresh_count'] = st.session_state.get('refresh_count', 0) + 1
+            st.rerun()
+
+    # Sidebar
+    with st.sidebar:
+        st.header("📡 API Status")
+        stats = st.session_state.get('api_stats', {'yahoo':0,'finnhub':0,'alpha_vantage':0,'cache_hits':0,'alpha_rotation_count':0})
+        
+        yahoo_calls = stats.get('yahoo', 0)
+        st.markdown(f"""
+        <div class="info-box">
+        🟢 <b>Yahoo Finance</b><br>
+        Kursdaten: {yahoo_calls} Calls<br>
+        <small>Unbegrenzt kostenlos</small>
+        </div>
+        """, unsafe_allow_html=True)
+        
+        fh_status = "🟢" if finnhub_limiter.can_call() else "🔴"
+        st.markdown(f"""
+        <div class="api-stat">
+            <div style="display:flex; justify-content:space-between;">
+                <span>Finnhub News</span>
+                <span>{fh_status} {finnhub_limiter.get_status()}/60 pro Minute</span>
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+        
+        alpha_status_list = alpha_manager.get_status()
+        all_alpha_exhausted = all(s['exhausted'] for s in alpha_status_list)
+        if all_alpha_exhausted:
+            st.markdown("""
+            <div class="error-box">
+            ⚠️ <b>Alpha Vantage erschöpft!</b><br>
+            Limit: 25/Tag pro Key<br>
+            Morgen wieder verfügbar
+            </div>
+            """, unsafe_allow_html=True)
+        
+        st.markdown("<div style='margin:10px 0;'><b>Alpha Vantage (25/Tag):</b></div>", unsafe_allow_html=True)
+        for status in alpha_status_list:
+            cls = "key-active" if status['active'] else "key-exhausted" if status['exhausted'] else ""
+            indicator = "▶️" if status['active'] else "✅" if not status['exhausted'] else "❌"
+            st.markdown(f"""
+            <div class="key-indicator {cls}">
+                {indicator} Key {status['index']+1}: {status['calls_today']}/25
+            </div>
+            """, unsafe_allow_html=True)
+        
+        rotations = stats.get('alpha_rotation_count',0)
+        cache_hits = stats.get('cache_hits',0)
+        st.markdown(f'<div style="font-size:0.8rem;margin:5px 0;">🔄 Rotationen: {rotations}</div>', unsafe_allow_html=True)
+        st.markdown(f'<div style="font-size:0.8rem;margin:5px 0;">📦 Cache Hits: {cache_hits}</div>', unsafe_allow_html=True)
+
+        st.divider()
+        st.header("🚀 Top Movers")
+        movers = st.session_state.get('top_movers_cache', {})
+        movers_source = st.session_state.get('movers_source', 'fallback')
+        
+        if movers:
+            cols = st.columns(3)
+            with cols[0]:
+                st.metric("Gainers", len(movers.get('gainers', [])))
+            with cols[1]:
+                st.metric("Losers", len(movers.get('losers', [])))
+            with cols[2]:
+                st.metric("Active", len(movers.get('most_active', [])))
             
-            # Mock Market Context für Test
-            market_ctx = MarketContext(
-                risk_off=False,
-                spy_change=0.01,
-                vix_level=18.0,
-                market_closed=False
-            )
+            source_color = "🟢" if movers_source == "yahoo" else "🟡" if movers_source == "cache" else "🔴"
+            st.caption(f"{source_color} Quelle: {movers_source.upper()}")
             
-            def update_progress(current: int, total: int):
-                progress = current / total
+            last_movers_check = st.session_state.get('last_movers_check', 0)
+            if last_movers_check:
+                ago = int((time.time() - last_movers_check) / 60)
+                st.caption(f"Letztes Update: vor {ago} Min")
+        else:
+            st.info("Noch keine Movers geladen")
+        
+        st.divider()
+        st.header("🧪 API Tests")
+        col1, col2 = st.columns(2)
+        with col1:
+            if st.button("Test Yahoo", use_container_width=True):
+                try:
+                    time.sleep(1)
+                    data = yf.Ticker("AAPL").history(period="5d")
+                    if not data.empty:
+                        st.success(f"✅ Yahoo OK! {len(data)} Tage")
+                        stats = st.session_state.get('api_stats', {})
+                        stats['yahoo'] = stats.get('yahoo', 0) + 1
+                        st.session_state['api_stats'] = stats
+                    else:
+                        st.error("❌ Keine Daten")
+                except Exception as e:
+                    st.error(f"❌ Fehler: {str(e)[:50]}")
+        with col2:
+            if st.button("Test Finnhub", use_container_width=True):
+                news, cached = get_finnhub_news_smart("TSLA")
+                if news:
+                    st.success(f"✅ Finnhub OK! {len(news)} News")
+                else:
+                    st.error("❌ Keine News")
+        
+        if st.button("🔄 Movers jetzt laden", use_container_width=True):
+            with st.spinner("Lade Movers..."):
+                try:
+                    movers, source = fetch_yahoo_movers()
+                    st.session_state['top_movers_cache'] = movers
+                    st.session_state['movers_source'] = source
+                    combined = set(st.session_state['watchlist'])
+                    for category, symbols in movers.items():
+                        combined.update(symbols)
+                    st.session_state['combined_universe'] = combined
+                    st.success(f"✅ {len(combined)} Symbole ({source})")
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"❌ Fehler: {str(e)[:100]}")
+        
+        st.divider()
+        st.header("🔍 Manuelle Abfrage")
+        manual_symbol = st.text_input("Symbol:", placeholder="z.B. NVDA", key="manual").upper()
+        if st.button("📊 Analyse starten") and manual_symbol:
+            with st.spinner(f"Analysiere {manual_symbol}..."):
+                try:
+                    time.sleep(1)
+                    scanner = ThreadPoolBullScanner(max_workers=1, min_delay=0.5)
+                    result = scanner.analyze_single_symbol(manual_symbol, 1, 1)
+                    if result:
+                        st.success(f"✅ Setup gefunden für {manual_symbol}!")
+                        st.json({
+                            'Symbol': result['symbol'],
+                            'Score': result['score'],
+                            'Price': result['price'],
+                            'Pullback': f"{result['pullback_pct']:.2%}",
+                            'R:R': f"{result['rr_ratio']:.1f}x",
+                            'APIs': result['api_sources'],
+                            'Source': result.get('source', 'unknown').value if hasattr(result.get('source'), 'value') else str(result.get('source', 'unknown'))
+                        })
+                    else:
+                        st.error(f"❌ Kein Setup für {manual_symbol} (Score < {MIN_SCORE_THRESHOLD} oder keine Daten)")
+                        scan_debug = st.session_state.get('scan_debug', [])
+                        if scan_debug:
+                            last = scan_debug[-1]
+                            st.write("Checks:", last.get('checks', {}))
+                            st.write("Fehler:", last.get('errors', []))
+                except Exception as e:
+                    st.error(f"❌ Fehler: {str(e)[:100]}")
+        
+        if st.button("🔄 Stats zurücksetzen"):
+            st.session_state['api_stats'] = {'yahoo':0,'finnhub':0,'alpha_vantage':0,'cache_hits':0,'alpha_rotation_count':0}
+            st.session_state['scan_debug'] = []
+            st.session_state['top_movers_cache'] = FALLBACK_MOVERS
+            st.session_state['movers_source'] = 'fallback'
+            st.session_state['last_movers_check'] = 0
+            st.session_state['combined_universe'] = set(DEFAULT_WATCHLIST + [s for sublist in FALLBACK_MOVERS.values() for s in sublist])
+            for i in alpha_manager.limiters:
+                alpha_manager.limiters[i]['exhausted'] = False
+                alpha_manager.limiters[i]['calls_today'] = 0
+                alpha_manager.limiters[i]['calls_per_min'] = []
+            st.success("Zurückgesetzt!")
+            st.rerun()
+
+    # Haupt-Scan Button
+    scan_triggered = False
+    if st.button('🚀 Smart Scan Starten (4 Parallel)', type="primary"):
+        scan_triggered = True
+
+    if scan_triggered:
+        with st.spinner("🔍 Scanne mit ThreadPool..."):
+            time.sleep(1)
+            market_ctx = get_market_context()
+            if market_ctx.get('market_closed'):
+                st.warning("⚠️ Markt ist möglicherweise geschlossen.")
+            
+            universe, source = get_combined_universe()
+            watchlist_count = len(st.session_state['watchlist'])
+            movers_count = len(universe) - watchlist_count
+            
+            st.info(f"📊 Scanne {len(universe)} Symbole ({watchlist_count} Watchlist + {movers_count} Movers from {source})")
+            
+            st.session_state['scan_debug'] = []
+            
+            # Erstelle Scan-Liste
+            scan_list = [(sym, get_symbol_source(sym)) for sym in universe]
+            scan_list.sort(key=lambda x: 0 if x[1] == SourceType.WATCHLIST else 1)
+            
+            # Initialisiere Scanner
+            scanner = ThreadPoolBullScanner(max_workers=4, min_delay=1.0)
+            
+            # Progress Callback
+            progress_bar = st.progress(0)
+            status_text = st.empty()
+            
+            def update_progress(completed, total, success, errors, current_sym, current_src):
+                progress = completed / total
                 progress_bar.progress(min(progress, 0.99))
-                status_text.text(f"Scanne... {current}/{total} Symbole")
+                status_text.text(f"Analysiere: {current_sym} [{current_src.value}] ({completed}/{total}) - OK:{success} Fehler:{errors}")
             
-            results = await scanner.scan_batch(symbols, market_ctx, update_progress)
-            return results
-        
-        # Führe Async Scan aus
-        try:
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            results = loop.run_until_complete(run_scan())
-            loop.close()
+            # Führe Scan aus
+            start_time = time.time()
+            results = scanner.scan_batch(scan_list, update_progress)
+            elapsed = time.time() - start_time
             
             progress_bar.empty()
             status_text.empty()
             
-            # Zeige Ergebnisse
-            with results_container:
-                st.success(f"✅ {len(results)} Setups gefunden")
-                
-                # Sortiere nach Score
-                results_sorted = sorted(results, key=lambda x: x.score, reverse=True)
-                
-                cols = st.columns(3)
-                for i, r in enumerate(results_sorted[:12]):
-                    with cols[i % 3]:
-                        with st.container():
-                            st.markdown(f"""
-                            <div class="bull-card">
-                                <h3>🐂 {r.symbol}</h3>
-                                <div class="metric-green">Score: {r.score}/100</div>
-                                <div>Price: ${r.price:.2f} | Pullback: -{r.pullback_pct:.1%}</div>
-                                <div>SL: ${r.stop_loss:.2f} | TP: ${r.target:.2f}</div>
-                                <div>R:R {r.rr_ratio:.1f}x | Vol {r.rvol:.1f}x</div>
-                                <small>{' | '.join(r.reasons[:3])}</small>
-                            </div>
-                            """, unsafe_allow_html=True)
+            st.session_state['scan_results'] = results
+            st.session_state['last_scan_time'] = datetime.now()
             
-        except Exception as e:
-            st.error(f"Scan Fehler: {e}")
-            logger.exception("Scan failed")
+            st.success(f"✅ {len(results)} Setups in {elapsed:.1f}s gefunden ({elapsed/len(universe):.2f}s pro Symbol)")
+            
+            # Alerts
+            alerts_sent = 0
+            for item in results:
+                if item['score'] > 75:
+                    symbol = item['symbol']
+                    price = item['price']
+                    score = item['score']
+                    if should_send_alert(symbol, price, score):
+                        setup_type = "CATALYST" if (item.get('news') and item['news'][0].get('tier', 0) == 1) else "GOLD"
+                        success = send_telegram_alert(
+                            symbol, price, item['pullback_pct'],
+                            item['news'][0] if item.get('news') else None,
+                            setup_type, item.get('pe_ratio'),
+                            item.get('api_sources'), item.get('tier'),
+                            item.get('source')
+                        )
+                        if success:
+                            record_alert(symbol, price, score, setup_type)
+                            alerts_sent += 1
+                            if alerts_sent <= 3:
+                                st.toast(f"🚨 {setup_type} Alert: {symbol} @ ${price:.2f} (Score: {score})")
 
-# ============================== Legacy Support ==============================
+    # Ergebnisse anzeigen
+    results = st.session_state.get('scan_results', [])
+    if results:
+        col1, col2, col3 = st.columns([2,1,1])
+        with col1:
+            st.subheader(f"📊 Gefundene Setups: {len(results)} (Score ≥ {MIN_SCORE_THRESHOLD})")
+        with col2:
+            sources = {}
+            for r in results:
+                src = r.get('source', SourceType.UNKNOWN)
+                sources[src.value if hasattr(src, 'value') else str(src)] = sources.get(src.value if hasattr(src, 'value') else str(src), 0) + 1
+            source_text = " | ".join([f"{k}: {v}" for k, v in sources.items()])
+            st.caption(f"Quellen: {source_text}")
+        with col3:
+            if st.session_state.get('auto_refresh'):
+                count = st.session_state.get('refresh_count', 0)
+                st.markdown(f'<div style="background:#1a1a2e;padding:10px;border-radius:8px;border-left:4px solid #00FF00;">🔴 LIVE #{count}</div>', unsafe_allow_html=True)
+            else:
+                last_time = st.session_state.get('last_scan_time')
+                if last_time:
+                    st.caption(f"Letzter Scan: {last_time.strftime('%H:%M:%S')}")
+        
+        sent_alerts = st.session_state.get('sent_alerts', {})
+        active_alerts = len([a for a in sent_alerts.values() if (datetime.now() - a['timestamp']).total_seconds() / 3600 < 24])
+        st.info(f"📱 Aktive Alerts (24h): {active_alerts} | In Cooldown: {len(sent_alerts) - active_alerts}")
+        
+        stats = st.session_state.get('api_stats', {})
+        api_summary = {}
+        for r in results:
+            for s in r.get('api_sources', []):
+                api_summary[s] = api_summary.get(s, 0) + 1
+        cache_count = sum(1 for r in results if r.get('from_cache'))
+        
+        cols = st.columns(4)
+        cols[0].metric("Setups", len(results))
+        cols[1].metric("Yahoo Calls", stats.get('yahoo', 0))
+        cols[2].metric("Finnhub", stats.get('finnhub', 0))
+        cols[3].metric("Alpha Vantage", stats.get('alpha_vantage', 0))
+        
+        st.success(f"✅ APIs in Ergebnissen: {api_summary} | Cache: {cache_count}")
+        
+        # Ergebnis-Grid
+        results_sorted = sorted(results, key=lambda x: (x['score'], x['pullback_pct']), reverse=True)
+        cols = st.columns(4)
+        for i, r in enumerate(results_sorted[:16]):
+            with cols[i % 4]:
+                render_card(r, st.container())
+        
+        with st.expander("📡 API Details"):
+            st.write(f"**Yahoo Finance:** {stats.get('yahoo', 0)} Calls (unbegrenzt)")
+            st.write(f"**Finnhub:** {finnhub_limiter.get_status()}/60 pro Minute")
+            st.write(f"**Alpha Vantage:** {stats.get('alpha_vantage', 0)}/25 pro Tag")
+            ctx = get_market_context()
+            st.write(f"**Marktkontext:** {'Risk-Off' if ctx.get('risk_off') else 'Risk-On'}")
+            
+            universe = st.session_state.get('combined_universe', set())
+            movers_source = st.session_state.get('movers_source', 'fallback')
+            st.write(f"**Scan-Universum:** {len(universe)} Symbole (Movers: {movers_source})")
+            st.write(f"- Watchlist: {len(st.session_state['watchlist'])}")
+            movers = st.session_state.get('top_movers_cache', {})
+            if movers:
+                st.write(f"- Gainers: {len(movers.get('gainers', []))}")
+                st.write(f"- Losers: {len(movers.get('losers', []))}")
+                st.write(f"- Most Active: {len(movers.get('most_active', []))}")
+            
+            st.write("---")
+            st.write("**Letzte Alerts:**")
+            for symbol, alert in list(st.session_state.get('sent_alerts', {}).items())[:5]:
+                ago = int((datetime.now() - alert['timestamp']).total_seconds() / 60)
+                st.write(f"  • {symbol}: {alert['setup_type']} vor {ago}min @ ${alert['price']:.2f}")
 
-# Behalte alte Funktionen für Kompatibilität
-def get_market_clock() -> Dict[str, Any]:
-    """Legacy Market Clock (unverändert)"""
-    et = pytz.timezone('US/Eastern')
-    now = datetime.now(et)
-    # ... (Implementation wie vorher)
-
-# ============================== Main ==============================
+    alerts = st.session_state.get('sent_alerts', {})
+    if alerts:
+        st.write("**Letzte Alerts:**")
+        for symbol, alert in list(alerts.items())[:5]:
+            ago = int((datetime.now() - alert['timestamp']).total_seconds() / 60)
+            st.write(f"  • {symbol}: {alert['setup_type']} vor {ago}min @ ${alert['price']:.2f}")
+    else:
+        st.info("👆 Klicke 'Smart Scan Starten' um die Watchlist + Top Movers zu analysieren!")
 
 if __name__ == "__main__":
-    render_async_ui()
+    main()
