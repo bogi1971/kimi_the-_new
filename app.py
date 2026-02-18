@@ -1,6 +1,7 @@
 """
 Elite Bull Scanner Pro V7.2 - Vollständige Version mit ThreadPool & Gemini AI Integration
 Inklusive Streamlit Context-Fix, KI-Prompt-Fix und OHNE "Losers" (Nur Momentum)
+15-Minuten Scan-Intervall
 """
 
 import streamlit as st
@@ -277,7 +278,7 @@ st.set_page_config(layout="wide", page_title="Elite Bull Scanner Pro V7.2", page
 # Filter Einstellungen
 MIN_PULLBACK_PERCENT = 0.05
 MAX_PULLBACK_PERCENT = 0.50
-AUTO_REFRESH_INTERVAL = 3600  # 1-Stunden-Takt
+AUTO_REFRESH_INTERVAL = 900  # 15-Minuten-Takt für das Daytrading
 ALERT_COOLDOWN_MINUTES = 60
 MIN_SCORE_THRESHOLD = 60
 MAX_WATCHLIST_SIZE = 100
@@ -558,7 +559,7 @@ def get_market_context() -> Dict[str, Any]:
 
 def fetch_yahoo_movers() -> Tuple[Dict[str, List[str]], str]:
     cache_key = "yahoo_movers"
-    cached = movers_cache.get(cache_key, 3600)
+    cached = movers_cache.get(cache_key, AUTO_REFRESH_INTERVAL)
     if cached:
         return cached, 'cache'
     
@@ -638,7 +639,7 @@ def get_symbol_source(symbol: str) -> SourceType:
 
 def get_finnhub_news_smart(symbol: str) -> Tuple[Optional[List[Dict]], bool]:
     cache_key = f"news_{symbol}"
-    cached = news_cache.get(cache_key, 3600)
+    cached = news_cache.get(cache_key, AUTO_REFRESH_INTERVAL)
     if cached:
         stats = st.session_state.get('api_stats', {})
         if isinstance(stats, dict):
@@ -799,7 +800,7 @@ def _default_structure_result(df: Optional[pd.DataFrame] = None) -> Dict[str, An
 
 def get_alpha_vantage_smart(symbol: str) -> Tuple[Optional[Dict], bool]:
     cache_key = f"av_fund_{symbol}"
-    cached = fundamentals_cache.get(cache_key, 3600)
+    cached = fundamentals_cache.get(cache_key, AUTO_REFRESH_INTERVAL)
     if cached:
         stats = st.session_state.get('api_stats', {})
         if isinstance(stats, dict):
