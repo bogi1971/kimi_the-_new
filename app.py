@@ -1,6 +1,6 @@
 """
 Elite Bull Scanner Pro V7.2 - Vollständige Version mit ThreadPool & Gemini AI Integration
-Inklusive Streamlit Context-Fix für Threading und behobenem KI-Prompt-Fehler
+Inklusive Streamlit Context-Fix, KI-Prompt-Fix und OHNE "Losers" (Nur Momentum)
 """
 
 import streamlit as st
@@ -229,7 +229,6 @@ st.markdown("""
 }
 .source-watchlist { border-left: 3px solid #00FF00; }
 .source-gainers { border-left: 3px solid #ff6b6b; }
-.source-losers { border-left: 3px solid #ffa502; }
 .source-mostactive { border-left: 3px solid #FFD700; }
 </style>
 """, unsafe_allow_html=True)
@@ -239,7 +238,6 @@ st.markdown("""
 class SourceType(str, Enum):
     WATCHLIST = "watchlist"
     GAINERS = "gainers"
-    LOSERS = "losers"
     MOST_ACTIVE = "most_active"
     UNKNOWN = "unknown"
 
@@ -309,7 +307,6 @@ DEFAULT_WATCHLIST = sorted(list(set([
 
 FALLBACK_MOVERS = {
     'gainers': ["MARA", "RIOT", "HUT", "COIN", "HOOD", "MSTR", "NVDA", "AMD", "PLTR", "TSLA"],
-    'losers': ["PFE", "BMY", "GILD", "AMGN", "JNJ", "SNY", "GSK", "AZN", "MRK", "ABBV"],
     'most_active': ["TSLA", "NVDA", "AMD", "PLTR", "COIN", "MSTR", "HOOD", "AAPL", "MSFT", "AMZN"]
 }
 
@@ -565,14 +562,13 @@ def fetch_yahoo_movers() -> Tuple[Dict[str, List[str]], str]:
     if cached:
         return cached, 'cache'
     
-    movers = {'gainers': [], 'losers': [], 'most_active': []}
+    movers = {'gainers': [], 'most_active': []}
     headers = {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
     }
     
     urls = {
         'gainers': 'https://finance.yahoo.com/gainers',
-        'losers': 'https://finance.yahoo.com/losers',
         'most_active': 'https://finance.yahoo.com/most-active'
     }
     
@@ -600,7 +596,7 @@ def fetch_yahoo_movers() -> Tuple[Dict[str, List[str]], str]:
             logger.error(f"Fehler beim Laden {category}: {e}")
             continue
     
-    if success_count >= 2:
+    if success_count >= 1: # Erfordert mindestens einen erfolgreichen Load
         movers_cache.set(cache_key, movers)
         return movers, 'yahoo'
     else:
@@ -634,8 +630,6 @@ def get_symbol_source(symbol: str) -> SourceType:
     movers = st.session_state.get('top_movers_cache', {})
     if symbol in movers.get('gainers', []):
         return SourceType.GAINERS
-    if symbol in movers.get('losers', []):
-        return SourceType.LOSERS
     if symbol in movers.get('most_active', []):
         return SourceType.MOST_ACTIVE
     return SourceType.UNKNOWN
@@ -1206,7 +1200,6 @@ def send_telegram_alert(symbol: str, price: float, pullback_pct: float, news_ite
     source_emoji = {
         SourceType.WATCHLIST: '📋',
         SourceType.GAINERS: '🚀',
-        SourceType.LOSERS: '💎',
         SourceType.MOST_ACTIVE: '🔥'
     }.get(source, '📊')
     
@@ -1259,7 +1252,6 @@ def render_card_html(item: Dict) -> str:
     source_badges = {
         SourceType.WATCHLIST: '<div class="tier-badge" style="background:#2d5a2d;">📋 WL</div>',
         SourceType.GAINERS: '<div class="mover-badge">🚀 GAINER</div>',
-        SourceType.LOSERS: '<div class="mover-badge" style="background:linear-gradient(90deg, #4ecdc4, #44a3aa);">💎 DIP</div>',
         SourceType.MOST_ACTIVE: '<div class="mover-badge" style="background:linear-gradient(90deg, #FFD700, #FFA500);">🔥 ACTIVE</div>'
     }
     source_html = source_badges.get(source, '')
@@ -1401,12 +1393,10 @@ def main():
         movers_source = st.session_state.get('movers_source', 'fallback')
         
         if movers:
-            cols = st.columns(3)
+            cols = st.columns(2)
             with cols[0]:
                 st.metric("Gainers", len(movers.get('gainers', [])))
             with cols[1]:
-                st.metric("Losers", len(movers.get('losers', [])))
-            with cols[2]:
                 st.metric("Active", len(movers.get('most_active', [])))
             
             source_color = "🟢" if movers_source == "yahoo" else "🟡" if movers_source == "cache" else "🔴"
@@ -1636,7 +1626,6 @@ def main():
             movers = st.session_state.get('top_movers_cache', {})
             if movers:
                 st.write(f"- Gainers: {len(movers.get('gainers', []))}")
-                st.write(f"- Losers: {len(movers.get('losers', []))}")
                 st.write(f"- Most Active: {len(movers.get('most_active', []))}")
             
             st.write("---")
