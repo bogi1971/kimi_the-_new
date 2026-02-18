@@ -6,3 +6,5 @@ requests
 pytz
 scipy
 google-genai
+lxml
+html5lib
