@@ -499,7 +499,7 @@ def analyze_news_tiered(symbol, tier, score):
     Returns: (news_list, sources_list, was_cached)
     """
     # Für hochgerankierte Symbole oder hohe Scores: detaillierte News
-    if tier <= 20 oder score > 60:
+    if tier <= 20 or score > 60:
         news, cached = get_finnhub_news_smart(symbol)
         if news:
             sources = ['FH']
