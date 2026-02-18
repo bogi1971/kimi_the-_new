@@ -11,6 +11,7 @@ import pytz
 import logging
 import random
 import os
+import threading
 
 warnings.filterwarnings('ignore')
 logging.basicConfig(level=logging.INFO)
@@ -205,6 +206,19 @@ st.markdown("""
     border-left: 3px solid #ff4b4b;
     opacity: 0.6;
 }
+.mover-badge {
+    background: linear-gradient(90deg, #ff6b6b, #ffa502);
+    color: white;
+    padding: 3px 8px;
+    border-radius: 3px;
+    font-size: 0.7rem;
+    margin: 0 2px;
+    font-weight: bold;
+}
+.source-watchlist { border-left: 3px solid #00FF00; }
+.source-gainers { border-left: 3px solid #ff6b6b; }
+.source-losers { border-left: 3px solid #ffa502; }
+.source-mostactive { border-left: 3px solid #FFD700; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -314,41 +328,41 @@ def get_market_context():
         return result
 
 # ============================== Konfiguration ==============================
-st.set_page_config(layout="wide", page_title="Elite Bull Scanner Pro V5.5", page_icon="🐂")
+st.set_page_config(layout="wide", page_title="Elite Bull Scanner Pro V6.0", page_icon="🐂")
 
 # Filter Einstellungen
 MIN_PULLBACK_PERCENT = 0.05
 MAX_PULLBACK_PERCENT = 0.50
-AUTO_REFRESH_INTERVAL = 1800
+AUTO_REFRESH_INTERVAL = 900  # 15 Minuten für Movers Check
 ALERT_COOLDOWN_MINUTES = 60
+MIN_SCORE_THRESHOLD = 60  # Nur Setups mit Score >= 60 anzeigen
+MAX_WATCHLIST_SIZE = 40  # Reduzierte Watchlist
 
 # ============================================
 # HIER DEINE ECHTEN API KEYS EINTRAGEN!
 # ============================================
 
 # Telegram Configuration
-TELEGRAM_BOT_TOKEN = "8317204351:AAHRu-mYYU0_NRIxNGEQ5voneIQaDKeQuF8"  # <-- DEIN BOT TOKEN HIER
-TELEGRAM_CHAT_ID = "5338135874"  # <-- DEINE CHAT ID HIER
+TELEGRAM_BOT_TOKEN = "8317204351:AAHRu-mYYU0_NRIxNGEQ5voneIQaDKeQuF8"
+TELEGRAM_CHAT_ID = "5338135874"
 
 # Finnhub API Key (kostenlos auf finnhub.io)
-FINNHUB_API_KEY = "d652vnpr01qqbln5m9cgd652vnpr01qqbln5m9d0"# <-- DEIN FINNHUB KEY HIER
+FINNHUB_API_KEY = "d652vnpr01qqbln5m9cgd652vnpr01qqbln5m9d0"
 
 # Alpha Vantage API Keys (kostenlos auf alphavantage.co - bis zu 3 Keys für 75 Calls/Tag)
 ALPHA_VANTAGE_KEYS = [
-    "N6PM9UCXL55JZTN9",  # <-- KEY 1 HIER
-    "4ebfbdb3c8374c99abbf259c168d93c1",      # <-- KEY 2 HIER (optional)
-    "6898e81a60be40a092710d0349f95110",       # <-- KEY 3 HIER (optional)
+    "N6PM9UCXL55JZTN9",
+    "4ebfbdb3c8374c99abbf259c168d93c1",
+    "6898e81a60be40a092710d0349f95110",
 ]
 
+# Kompakte Premium-Watchlist (40 Ticker)
 DEFAULT_WATCHLIST = sorted(list(set([
-    "ABBV", "ACHV", "ACRS", "ADMA", "ALDX", "ALNY", "AMD", "AMGN", "AMRN", "APLS", "AQST", "ASND",
-    "ATOS", "ATRA", "AVXL", "AZN", "BCRX", "BEAM", "BIIB", "BLTE", "BMRN", "BMY", "BNTX", "CELC",
-    "CHRS", "CING", "COIN", "CRSP", "CRVS", "CRWD", "CURE", "DNLI", "EDIT", "ETON", "EVFM", "EXEL",
-    "FATE", "GERN", "GILD", "GOSS", "GSK", "HALO", "HOOD", "HUT", "IBRX", "INO", "IONS", "IOVA",
-    "JAZZ", "JNJ", "LCTX", "LLY", "LNTH", "MARA", "MCRB", "MNKD", "MRK", "MRNA", "MSTR", "NKTR",
-    "NTLA", "NVAX", "NVDA", "NVS", "OCGN", "PFE", "PLRX", "PLTR", "QGEN", "RAPT", "RCKT", "REGN",
-    "REPL", "RIGL", "RIOT", "RLAY", "ROG", "RYTM", "SAP", "SAVA", "SENS", "SNY", "SRPT", "TAK",
-    "TBPH", "TSLA", "TXMD", "UUUU", "VIVK", "VNDA", "VRTX", "VTYX", "VXRT", "XERS", "ZLAB"
+    "NVDA", "TSLA", "AMD", "PLTR", "COIN", "MSTR", "HOOD", "CRWD",
+    "LLY", "ABBV", "JNJ", "PFE", "MRK", "BMY", "GILD", "AMGN",
+    "BIIB", "VRTX", "REGN", "MRNA", "BNTX", "GSK", "AZN", "SNY",
+    "JAZZ", "ALNY", "IONS", "NTLA", "EDIT", "CRSP", "BEAM", "VNDA",
+    "SAVA", "GERN", "FATE", "IOVA", "SRPT", "RCKT", "APLS", "HALO"
 ])))
 
 # ============================== Session State ==============================
@@ -362,8 +376,11 @@ def init_session_state():
         'auto_refresh': False,
         'refresh_count': 0,
         'last_auto_refresh': 0,
+        'last_movers_check': 0,  # Neuer Timestamp für Movers
         'alert_history': [],
         'scan_debug': [],
+        'top_movers_cache': [],  # Cache für Top Movers
+        'combined_universe': set(DEFAULT_WATCHLIST),  # Kombiniertes Universum
     }
     for k, v in defaults.items():
         if k not in st.session_state:
@@ -393,6 +410,7 @@ news_cache = SmartCache()
 fundamentals_cache = SmartCache()
 structure_cache = SmartCache()
 market_context_cache = SmartCache()
+movers_cache = SmartCache()  # Neuer Cache für Movers
 
 class RateLimiter:
     def __init__(self, max_calls, window_seconds):
@@ -465,6 +483,78 @@ class AlphaVantageManager:
 
 finnhub_limiter = RateLimiter(60, 60)
 alpha_manager = AlphaVantageManager(ALPHA_VANTAGE_KEYS)
+
+# ============================== NEU: Top Movers Functions ==============================
+def fetch_yahoo_movers():
+    """Hole Top Movers von Yahoo Finance (Gainers, Losers, Most Active)"""
+    cache_key = "yahoo_movers"
+    cached = movers_cache.get(cache_key, 600)  # 10 Min Cache
+    if cached:
+        return cached
+    
+    movers = {'gainers': [], 'losers': [], 'most_active': []}
+    headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
+    
+    # URLs für verschiedene Kategorien
+    urls = {
+        'gainers': 'https://finance.yahoo.com/gainers',
+        'losers': 'https://finance.yahoo.com/losers',
+        'most_active': 'https://finance.yahoo.com/most-active'
+    }
+    
+    for category, url in urls.items():
+        try:
+            response = requests.get(url, headers=headers, timeout=10)
+            if response.status_code == 200:
+                tables = pd.read_html(StringIO(response.text))
+                if tables and len(tables) > 0:
+                    df = tables[0]
+                    if 'Symbol' in df.columns:
+                        # Top 15 pro Kategorie
+                        symbols = df['Symbol'].head(15).tolist()
+                        movers[category] = symbols
+                        logger.info(f"{category}: {len(symbols)} Symbole geladen")
+        except Exception as e:
+            logger.error(f"Fehler beim Laden {category}: {e}")
+    
+    movers_cache.set(cache_key, movers)
+    return movers
+
+def get_combined_universe():
+    """Kombiniere Watchlist mit Top Movers"""
+    # Prüfe ob Movers-Update fällig (alle 15 Min)
+    last_check = st.session_state.get('last_movers_check', 0)
+    now = time.time()
+    
+    if now - last_check >= 900:  # 15 Minuten
+        st.session_state['last_movers_check'] = now
+        
+        with st.spinner("🔄 Lade Top Movers..."):
+            movers = fetch_yahoo_movers()
+            st.session_state['top_movers_cache'] = movers
+            
+            # Kombiniere alle Symbole
+            combined = set(st.session_state['watchlist'])
+            for category, symbols in movers.items():
+                combined.update(symbols)
+            
+            st.session_state['combined_universe'] = combined
+            logger.info(f"Universum aktualisiert: {len(combined)} Symbole")
+    
+    return st.session_state['combined_universe']
+
+def get_symbol_source(symbol):
+    """Bestimme die Quelle eines Symbols"""
+    if symbol in st.session_state['watchlist']:
+        return 'watchlist'
+    movers = st.session_state.get('top_movers_cache', {})
+    if symbol in movers.get('gainers', []):
+        return 'gainers'
+    if symbol in movers.get('losers', []):
+        return 'losers'
+    if symbol in movers.get('most_active', []):
+        return 'most_active'
+    return 'unknown'
 
 # ============================== News Functions ==============================
 def get_finnhub_news_smart(symbol):
@@ -834,8 +924,9 @@ def analyze_smart(symbol, tier, total_tickers, market_ctx=None):
         _log_scan_debug(debug_info)
         return None
     
-    if score < 35:
-        debug_info['errors'].append(f"Score {score} zu niedrig")
+    # NEU: Filter - Nur Score >= 60
+    if score < MIN_SCORE_THRESHOLD:
+        debug_info['errors'].append(f"Score {score} < {MIN_SCORE_THRESHOLD} (Threshold)")
         _log_scan_debug(debug_info)
         return None
     
@@ -853,6 +944,9 @@ def analyze_smart(symbol, tier, total_tickers, market_ctx=None):
     if pe_ratio is not None:
         reasons.append(f"{'💰' if pe_ratio<15 else '📊'} PE {pe_ratio:.1f}")
     
+    # Quelle hinzufügen
+    source = get_symbol_source(symbol)
+    
     return {
         'symbol': symbol,
         'tier': tier,
@@ -868,7 +962,8 @@ def analyze_smart(symbol, tier, total_tickers, market_ctx=None):
         'news': news,
         'pe_ratio': pe_ratio,
         'api_sources': list(set([s for s in sources] + (['AV'] if fundamentals else []))),
-        'from_cache': cached_news or fund_cached
+        'from_cache': cached_news or fund_cached,
+        'source': source  # NEU: Quelle des Symbols
     }
 
 def _log_scan_debug(debug_info):
@@ -909,20 +1004,32 @@ def record_alert(symbol, price, score, setup_type):
     st.session_state['alert_history'] = st.session_state['alert_history'][-20:]
 
 # ============================== Telegram Alert ==============================
-def send_telegram_alert(symbol, price, pullback_pct, news_item, setup_type, pe_ratio=None, api_sources=None, tier=None):
+def send_telegram_alert(symbol, price, pullback_pct, news_item, setup_type, pe_ratio=None, api_sources=None, tier=None, source=None):
     if not TELEGRAM_BOT_TOKEN or len(TELEGRAM_BOT_TOKEN)<10:
         return False
     news_title = news_item.get('title','')[:40] + '...' if news_item else 'Keine News'
     news_url = news_item.get('url','') if news_item else f'https://finance.yahoo.com/quote/{symbol}'
     emoji = "🟣" if setup_type=="CATALYST" else "🏆" if setup_type=="GOLD" else "🐂"
+    
+    # Quelle-Emoji
+    source_emoji = {
+        'watchlist': '📋',
+        'gainers': '🚀',
+        'losers': '💎',
+        'most_active': '🔥'
+    }.get(source, '📊')
+    
     pe_info = f"\n📊 P/E: {pe_ratio:.1f}" if pe_ratio else ""
     api_info = f"\n📡 {','.join(api_sources)}" if api_sources else ""
     tier_info = f"\n🎯 Tier {tier}" if tier else ""
+    source_info = f"\n{source_emoji} Quelle: {source}" if source else ""
+    
     msg = f"""{emoji} <b>{setup_type}: {symbol}</b> {emoji}
 📉 Pullback: <b>-{pullback_pct:.1f}%</b>
-💵 Preis: ${price:.2f}{pe_info}{api_info}{tier_info}
+💵 Preis: ${price:.2f}{pe_info}{api_info}{tier_info}{source_info}
 📰 {news_title}
 👉 <a href='{news_url}'>News</a> | <a href='https://www.tradingview.com/chart/?symbol={symbol}'>Chart</a>"""
+    
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
     payload = {"chat_id": TELEGRAM_CHAT_ID, "text": msg, "parse_mode": "HTML", "disable_web_page_preview": True}
     try:
@@ -932,12 +1039,25 @@ def send_telegram_alert(symbol, price, pullback_pct, news_item, setup_type, pe_r
         return False
 
 # ============================== Karten HTML ==============================
-def render_card_html(sym, price, pullback, sl, target, rr, reasons, news_item, tier_html, api_html, cache_html, conf_color, tv_url, score, rvol, pullback_color):
+def render_card_html(sym, price, pullback, sl, target, rr, reasons, news_item, tier_html, api_html, cache_html, conf_color, tv_url, score, rvol, pullback_color, source):
     news_title = news_item['title'][:40] + '...' if news_item else 'Keine News'
     news_url = news_item['url'] if news_item else f'https://finance.yahoo.com/quote/{sym}'
+    
+    # Quelle-Badge
+    source_badges = {
+        'watchlist': '<div class="tier-badge" style="background:#2d5a2d;">📋 WL</div>',
+        'gainers': '<div class="mover-badge">🚀 GAINER</div>',
+        'losers': '<div class="mover-badge" style="background:linear-gradient(90deg, #4ecdc4, #44a3aa);">💎 DIP</div>',
+        'most_active': '<div class="mover-badge" style="background:linear-gradient(90deg, #FFD700, #FFA500);">🔥 ACTIVE</div>'
+    }
+    source_html = source_badges.get(source, '')
+    
     html = f"""
-    <div class="bull-card">
-        <h3>🐂 {sym}</h3>
+    <div class="bull-card source-{source}">
+        <div style="display:flex; justify-content:space-between; align-items:center;">
+            <h3 style="margin:0;">🐂 {sym}</h3>
+            {source_html}
+        </div>
         <div class="pullback-badge" style="background: {pullback_color};">-{pullback:.1%}</div>
         <div style="margin: 5px 0;">{tier_html}{api_html}{cache_html}</div>
         <div class="price">${price:.2f}</div>
@@ -966,6 +1086,7 @@ def render_card(item, container):
     rvol = item['rvol']
     pe = item.get('pe_ratio')
     tier = item.get('tier', '-')
+    source = item.get('source', 'unknown')
     reasons_txt = ' | '.join(item['reasons'][:3])
     news_found = item.get('news', [])
     apis = item.get('api_sources', [])
@@ -978,7 +1099,7 @@ def render_card(item, container):
     api_html = ''.join([f'<div class="tier-badge">{a}</div>' for a in apis])
     cache_html = '<div class="cache-badge">CACHE</div>' if cached else ''
     html = render_card_html(sym, price, pullback, sl, target, rr, reasons_txt, 
-                            news_found[0] if news_found else None, tier_html, api_html, cache_html, conf_color, tv_url, score, rvol, pullback_color)
+                            news_found[0] if news_found else None, tier_html, api_html, cache_html, conf_color, tv_url, score, rvol, pullback_color, source)
     with container:
         st.markdown(html, unsafe_allow_html=True)
 
@@ -1005,10 +1126,29 @@ st.markdown(f"""
 """, unsafe_allow_html=True)
 
 # ============================== Automatisches Refresh ==============================
+# NEU: Prüfe auf Movers-Update alle 15 Min
 if st.session_state.get('auto_refresh'):
     last = st.session_state.get('last_auto_refresh', 0)
-    if time.time() - last >= AUTO_REFRESH_INTERVAL:
-        st.session_state['last_auto_refresh'] = time.time()
+    last_movers = st.session_state.get('last_movers_check', 0)
+    now = time.time()
+    
+    # Movers-Check alle 15 Min
+    if now - last_movers >= AUTO_REFRESH_INTERVAL:
+        st.session_state['last_movers_check'] = now
+        # Lade Movers im Hintergrund
+        movers = fetch_yahoo_movers()
+        st.session_state['top_movers_cache'] = movers
+        # Aktualisiere kombiniertes Universum
+        combined = set(st.session_state['watchlist'])
+        for category, symbols in movers.items():
+            combined.update(symbols)
+        st.session_state['combined_universe'] = combined
+        logger.info(f"Movers aktualisiert: {len(combined)} Symbole")
+        st.rerun()
+    
+    # Normaler Refresh
+    if now - last >= AUTO_REFRESH_INTERVAL:
+        st.session_state['last_auto_refresh'] = now
         st.session_state['refresh_count'] = st.session_state.get('refresh_count', 0) + 1
         st.rerun()
 
@@ -1062,6 +1202,26 @@ with st.sidebar:
     st.markdown(f'<div style="font-size:0.8rem;margin:5px 0;">🔄 Rotationen: {rotations}</div>', unsafe_allow_html=True)
     st.markdown(f'<div style="font-size:0.8rem;margin:5px 0;">📦 Cache Hits: {cache_hits}</div>', unsafe_allow_html=True)
 
+    # NEU: Movers Status
+    st.divider()
+    st.header("🚀 Top Movers")
+    movers = st.session_state.get('top_movers_cache', {})
+    if movers:
+        cols = st.columns(3)
+        with cols[0]:
+            st.metric("Gainers", len(movers.get('gainers', [])))
+        with cols[1]:
+            st.metric("Losers", len(movers.get('losers', [])))
+        with cols[2]:
+            st.metric("Active", len(movers.get('most_active', [])))
+        
+        last_movers_check = st.session_state.get('last_movers_check', 0)
+        if last_movers_check:
+            ago = int((time.time() - last_movers_check) / 60)
+            st.caption(f"Letztes Update: vor {ago} Min")
+    else:
+        st.info("Noch keine Movers geladen")
+    
     st.divider()
     st.header("🧪 API Tests")
     col1, col2 = st.columns(2)
@@ -1086,6 +1246,18 @@ with st.sidebar:
             else:
                 st.error("❌ Keine News")
     
+    # NEU: Manuelle Movers-Aktualisierung
+    if st.button("🔄 Movers jetzt laden", use_container_width=True):
+        with st.spinner("Lade Movers..."):
+            movers = fetch_yahoo_movers()
+            st.session_state['top_movers_cache'] = movers
+            combined = set(st.session_state['watchlist'])
+            for category, symbols in movers.items():
+                combined.update(symbols)
+            st.session_state['combined_universe'] = combined
+            st.success(f"✅ {len(combined)} Symbole geladen")
+            st.rerun()
+    
     st.divider()
     st.header("🔍 Manuelle Abfrage")
     manual_symbol = st.text_input("Symbol:", placeholder="z.B. NVDA", key="manual").upper()
@@ -1100,10 +1272,11 @@ with st.sidebar:
                     'Price': result['price'],
                     'Pullback': f"{result['pullback_pct']:.2%}",
                     'R:R': f"{result['rr_ratio']:.1f}x",
-                    'APIs': result['api_sources']
+                    'APIs': result['api_sources'],
+                    'Source': result.get('source', 'unknown')
                 })
             else:
-                st.error(f"❌ Kein Setup für {manual_symbol}")
+                st.error(f"❌ Kein Setup für {manual_symbol} (Score < {MIN_SCORE_THRESHOLD} oder keine Daten)")
                 scan_debug = st.session_state.get('scan_debug', [])
                 if scan_debug:
                     last = scan_debug[-1]
@@ -1113,6 +1286,8 @@ with st.sidebar:
     if st.button("🔄 Stats zurücksetzen"):
         st.session_state['api_stats'] = {'yahoo':0,'finnhub':0,'alpha_vantage':0,'cache_hits':0,'alpha_rotation_count':0}
         st.session_state['scan_debug'] = []
+        st.session_state['top_movers_cache'] = {}
+        st.session_state['last_movers_check'] = 0
         for i in alpha_manager.limiters:
             alpha_manager.limiters[i]['exhausted'] = False
             alpha_manager.limiters[i]['calls_today'] = 0
@@ -1131,32 +1306,29 @@ if scan_triggered:
         if market_ctx.get('market_closed'):
             st.warning("⚠️ Markt ist möglicherweise geschlossen.")
         
+        # NEU: Hole kombiniertes Universum (Watchlist + Movers)
+        universe = get_combined_universe()
+        st.info(f"📊 Scanne {len(universe)} Symbole ({len(st.session_state['watchlist'])} Watchlist + {len(universe) - len(st.session_state['watchlist'])} Movers)")
+        
         st.session_state['scan_debug'] = []
         results = []
         progress = st.progress(0)
         status_text = st.empty()
         error_count = 0
         success_count = 0
-        scan_list = [(s, '📋') for s in st.session_state['watchlist']]
-        seen = set(st.session_state['watchlist'])
+        
+        # Konvertiere zu Liste mit Quellen-Info für Anzeige
+        scan_list = []
+        for sym in universe:
+            source = get_symbol_source(sym)
+            scan_list.append((sym, source))
+        
+        # Sortiere: Watchlist zuerst, dann Movers
+        scan_list.sort(key=lambda x: 0 if x[1] == 'watchlist' else 1)
 
-        try:
-            headers = {'User-Agent':'Mozilla/5.0'}
-            r = requests.get('https://finance.yahoo.com/gainers', headers=headers, timeout=10)
-            if r.status_code == 200:
-                tables = pd.read_html(StringIO(r.text))
-                if tables:
-                    gainers = tables[0]['Symbol'].head(20).tolist()
-                    for g in gainers:
-                        if g not in seen:
-                            scan_list.append((g, '🌍'))
-                            seen.add(g)
-        except:
-            pass
-
-        for i, (sym, _) in enumerate(scan_list):
+        for i, (sym, source) in enumerate(scan_list):
             tier = i + 1
-            status_text.text(f"Analysiere: {sym} ({tier}/{len(scan_list)}) - OK:{success_count} Fehler:{error_count}")
+            status_text.text(f"Analysiere: {sym} [{source}] ({tier}/{len(scan_list)}) - OK:{success_count} Fehler:{error_count}")
             
             try:
                 res = analyze_smart(sym, tier, len(scan_list), market_ctx)
@@ -1184,6 +1356,7 @@ if scan_triggered:
         st.session_state['scan_results'] = results
         st.session_state['last_scan_time'] = datetime.now()
 
+        # Alerts nur für Score > 75
         alerts_sent_this_scan = 0
         for item in results:
             if item['score'] > 75:
@@ -1196,7 +1369,8 @@ if scan_triggered:
                         symbol, price, item['pullback_pct'],
                         item['news'][0] if item.get('news') else None,
                         setup_type, item.get('pe_ratio'),
-                        item.get('api_sources'), item.get('tier')
+                        item.get('api_sources'), item.get('tier'),
+                        item.get('source')
                     )
                     if success:
                         record_alert(symbol, price, score, setup_type)
@@ -1207,10 +1381,20 @@ if scan_triggered:
 # ============================== Ergebnisse anzeigen ==============================
 results = st.session_state.get('scan_results', [])
 if results:
-    col1, col2 = st.columns([3,1])
+    # NEU: Filter-Info
+    col1, col2, col3 = st.columns([2,1,1])
     with col1:
-        st.subheader(f"📊 Gefundene Setups: {len(results)}")
+        st.subheader(f"📊 Gefundene Setups: {len(results)} (Score ≥ {MIN_SCORE_THRESHOLD})")
     with col2:
+        # Zeige Verteilung nach Quelle
+        sources = {}
+        for r in results:
+            src = r.get('source', 'unknown')
+            sources[src] = sources.get(src, 0) + 1
+        
+        source_text = " | ".join([f"{k}: {v}" for k, v in sources.items()])
+        st.caption(f"Quellen: {source_text}")
+    with col3:
         if st.session_state.get('auto_refresh'):
             count = st.session_state.get('refresh_count', 0)
             st.markdown(f'<div style="background:#1a1a2e;padding:10px;border-radius:8px;border-left:4px solid #00FF00;">🔴 LIVE #{count}</div>', unsafe_allow_html=True)
@@ -1230,10 +1414,13 @@ if results:
             api_summary[s] = api_summary.get(s, 0) + 1
     cache_count = sum(1 for r in results if r.get('from_cache'))
     
-    st.metric("Setups", len(results))
-    st.metric("Yahoo Calls", stats.get('yahoo', 0))
-    st.metric("Finnhub", stats.get('finnhub', 0))
-    st.metric("Alpha Vantage", stats.get('alpha_vantage', 0))
+    cols = st.columns(4)
+    cols[0].metric("Setups", len(results))
+    cols[1].metric("Yahoo Calls", stats.get('yahoo', 0))
+    cols[2].metric("Finnhub", stats.get('finnhub', 0))
+    cols[3].metric("Alpha Vantage", stats.get('alpha_vantage', 0))
+    
+    # NEU: Quellen-Statistik
     st.success(f"✅ APIs in Ergebnissen: {api_summary} | Cache: {cache_count}")
     
     def render_results_grid(results):
@@ -1251,6 +1438,17 @@ if results:
         st.write(f"**Alpha Vantage:** {stats.get('alpha_vantage', 0)}/25 pro Tag")
         ctx = get_market_context()
         st.write(f"**Marktkontext:** {'Risk-Off' if ctx.get('risk_off') else 'Risk-On'}")
+        
+        # NEU: Zeige Universum-Zusammensetzung
+        universe = st.session_state.get('combined_universe', set())
+        st.write(f"**Scan-Universum:** {len(universe)} Symbole")
+        st.write(f"- Watchlist: {len(st.session_state['watchlist'])}")
+        movers = st.session_state.get('top_movers_cache', {})
+        if movers:
+            st.write(f"- Gainers: {len(movers.get('gainers', []))}")
+            st.write(f"- Losers: {len(movers.get('losers', []))}")
+            st.write(f"- Most Active: {len(movers.get('most_active', []))}")
+        
         st.write("---")
         st.write("**Letzte Alerts:**")
         for symbol, alert in list(st.session_state.get('sent_alerts', {}).items())[:5]:
@@ -1264,4 +1462,4 @@ if alerts:
         ago = int((datetime.now() - alert['timestamp']).total_seconds() / 60)
         st.write(f"  • {symbol}: {alert['setup_type']} vor {ago}min @ ${alert['price']:.2f}")
 else:
-    st.info("👆 Klicke 'Smart Scan Starten' um die Watchlist zu analysieren!")
+    st.info("👆 Klicke 'Smart Scan Starten' um die Watchlist + Top Movers zu analysieren!")
