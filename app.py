@@ -23,7 +23,7 @@ import json
 import threading
 import numpy as np
 import google.generativeai as genai
-
+from google import genai
 warnings.filterwarnings('ignore')
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
