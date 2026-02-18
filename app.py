@@ -271,23 +271,47 @@ def get_market_clock():
     }
 
 def get_market_context():
+    """Hole Marktkontext mit Caching (5 Minuten)"""
+    cache_key = "market_ctx"
+    cached = market_context_cache.get(cache_key, 300)
+    if cached:
+        logger.info("Market Context aus Cache")
+        return cached
+    
     try:
         spy = yf.Ticker("SPY")
         spy_data = spy.history(period="5d")
         if len(spy_data) < 2:
-            return {'risk_off': False, 'spy_change': 0, 'market_closed': True}
+            result = {'risk_off': False, 'spy_change': 0, 'market_closed': True}
+            market_context_cache.set(cache_key, result)
+            return result
+        
         spy_change = (spy_data['Close'].iloc[-1] - spy_data['Close'].iloc[-2]) / spy_data['Close'].iloc[-2]
-        try:
-            vix = yf.Ticker("^VIX")
-            vix_data = vix.history(period="2d")
-            vix_level = vix_data['Close'].iloc[-1] if not vix_data.empty else 20
-        except:
-            vix_level = 20
+        
+        vix_level = 20
+        if abs(spy_change) > 0.01:
+            try:
+                vix = yf.Ticker("^VIX")
+                vix_data = vix.history(period="2d")
+                vix_level = vix_data['Close'].iloc[-1] if not vix_data.empty else 20
+            except:
+                pass
+        
         risk_off = (spy_change < -0.02) or (vix_level > 30)
-        return {'risk_off': risk_off, 'spy_change': spy_change, 'vix_level': vix_level, 'market_closed': False}
+        result = {
+            'risk_off': risk_off, 
+            'spy_change': spy_change, 
+            'vix_level': vix_level, 
+            'market_closed': False
+        }
+        market_context_cache.set(cache_key, result)
+        return result
+        
     except Exception as e:
         logger.error(f"Fehler beim Marktkontext: {e}")
-        return {'risk_off': False, 'spy_change': 0, 'vix_level': 20, 'market_closed': True}
+        result = {'risk_off': False, 'spy_change': 0, 'vix_level': 20, 'market_closed': True}
+        market_context_cache.set(cache_key, result)
+        return result
 
 # ============================== Konfiguration ==============================
 st.set_page_config(layout="wide", page_title="Elite Bull Scanner Pro V5.5", page_icon="🐂")
@@ -299,36 +323,38 @@ AUTO_REFRESH_INTERVAL = 1800
 ALERT_COOLDOWN_MINUTES = 60
 
 # ============================================
-# ECHTE API-KEYS hier eintragen!
+# HIER DEINE ECHTEN API KEYS EINTRAGEN!
 # ============================================
 
-# Telegram
-TELEGRAM_BOT_TOKEN = "8317204351:AAHRu-mYYU0_NRIxNGEQ5voneIQaDKeQuF8"  # DEIN BOT TOKEN
-TELEGRAM_CHAT_ID = "5338135874"  # DEINE CHAT ID
+# Telegram Configuration
+TELEGRAM_BOT_TOKEN = "8317204351:AAHRu-mYYU0_NRIxNGEQ5voneIQaDKeQuF8"  # <-- DEIN BOT TOKEN HIER
+TELEGRAM_CHAT_ID = "5338135874"  # <-- DEINE CHAT ID HIER
 
-# Finnhub API Key
-FINNHUB_API_KEY = "d652vnpr01qqbln5m9cgd652vnpr01qqbln5m9d0"
+# Finnhub API Key (kostenlos auf finnhub.io)
+FINNHUB_API_KEY = "d652vnpr01qqbln5m9cgd652vnpr01qqbln5m9d0"# <-- DEIN FINNHUB KEY HIER
 
-# Alpha Vantage Keys (bis zu 3 Stück)
+# Alpha Vantage API Keys (kostenlos auf alphavantage.co - bis zu 3 Keys für 75 Calls/Tag)
 ALPHA_VANTAGE_KEYS = [
-    "N6PM9UCXL55JZTN9",
-    "4ebfbdb3c8374c99abbf259c168d93c1",
-    "6898e81a60be40a092710d0349f95110",
+    "N6PM9UCXL55JZTN9",  # <-- KEY 1 HIER
+    "4ebfbdb3c8374c99abbf259c168d93c1",      # <-- KEY 2 HIER (optional)
+    "6898e81a60be40a092710d0349f95110",       # <-- KEY 3 HIER (optional)
 ]
 
-# ============================== Session State Initialisieren ==============================
+DEFAULT_WATCHLIST = sorted(list(set([
+    "ABBV", "ACHV", "ACRS", "ADMA", "ALDX", "ALNY", "AMD", "AMGN", "AMRN", "APLS", "AQST", "ASND",
+    "ATOS", "ATRA", "AVXL", "AZN", "BCRX", "BEAM", "BIIB", "BLTE", "BMRN", "BMY", "BNTX", "CELC",
+    "CHRS", "CING", "COIN", "CRSP", "CRVS", "CRWD", "CURE", "DNLI", "EDIT", "ETON", "EVFM", "EXEL",
+    "FATE", "GERN", "GILD", "GOSS", "GSK", "HALO", "HOOD", "HUT", "IBRX", "INO", "IONS", "IOVA",
+    "JAZZ", "JNJ", "LCTX", "LLY", "LNTH", "MARA", "MCRB", "MNKD", "MRK", "MRNA", "MSTR", "NKTR",
+    "NTLA", "NVAX", "NVDA", "NVS", "OCGN", "PFE", "PLRX", "PLTR", "QGEN", "RAPT", "RCKT", "REGN",
+    "REPL", "RIGL", "RIOT", "RLAY", "ROG", "RYTM", "SAP", "SAVA", "SENS", "SNY", "SRPT", "TAK",
+    "TBPH", "TSLA", "TXMD", "UUUU", "VIVK", "VNDA", "VRTX", "VTYX", "VXRT", "XERS", "ZLAB"
+])))
+
+# ============================== Session State ==============================
 def init_session_state():
     defaults = {
-        'watchlist': sorted(list(set([
-            "ABBV", "ACHV", "ACRS", "ADMA", "ALDX", "ALNY", "AMD", "AMGN", "AMRN", "APLS", "AQST", "ASND",
-            "ATOS", "ATRA", "AVXL", "AZN", "BCRX", "BEAM", "BIIB", "BLTE", "BMRN", "BMY", "BNTX", "CELC",
-            "CHRS", "CING", "COIN", "CRSP", "CRVS", "CRWD", "CURE", "DNLI", "EDIT", "ETON", "EVFM", "EXEL",
-            "FATE", "GERN", "GILD", "GOSS", "GSK", "HALO", "HOOD", "HUT", "IBRX", "INO", "IONS", "IOVA",
-            "JAZZ", "JNJ", "LCTX", "LLY", "LNTH", "MARA", "MCRB", "MNKD", "MRK", "MRNA", "MSTR", "NKTR",
-            "NTLA", "NVAX", "NVDA", "NVS", "OCGN", "PFE", "PLRX", "PLTR", "QGEN", "RAPT", "RCKT", "REGN",
-            "REPL", "RIGL", "RIOT", "RLAY", "ROG", "RYTM", "SAP", "SAVA", "SENS", "SNY", "SRPT", "TAK",
-            "TBPH", "TSLA", "TXMD", "UUUU", "VIVK", "VNDA", "VRTX", "VTYX", "VXRT", "XERS", "ZLAB"
-        ]))),
+        'watchlist': DEFAULT_WATCHLIST,
         'sent_alerts': {},
         'api_stats': {'yahoo': 0, 'finnhub': 0, 'alpha_vantage': 0, 'cache_hits': 0, 'alpha_rotation_count': 0},
         'scan_results': [],
@@ -366,6 +392,7 @@ class SmartCache:
 news_cache = SmartCache()
 fundamentals_cache = SmartCache()
 structure_cache = SmartCache()
+market_context_cache = SmartCache()
 
 class RateLimiter:
     def __init__(self, max_calls, window_seconds):
@@ -475,7 +502,6 @@ def get_finnhub_news_smart(symbol):
                 st.session_state['api_stats'] = stats
             
             if isinstance(data, list) and len(data) > 0:
-                # Sortiere nach Datum und nimm die neuesten 5
                 sorted_news = sorted(data, key=lambda x: x.get('datetime', 0), reverse=True)[:5]
                 formatted_news = []
                 for item in sorted_news:
@@ -484,7 +510,7 @@ def get_finnhub_news_smart(symbol):
                         'url': item.get('url', ''),
                         'source': item.get('source', 'Finnhub'),
                         'datetime': item.get('datetime', 0),
-                        'score': 10  # Basis-Score für News
+                        'score': 10
                     })
                 news_cache.set(cache_key, formatted_news)
                 return formatted_news, False
@@ -498,20 +524,17 @@ def analyze_news_tiered(symbol, tier, score):
     Analysiere News für ein Symbol basierend auf Tier und aktuellem Score
     Returns: (news_list, sources_list, was_cached)
     """
-    # Für hochgerankierte Symbole oder hohe Scores: detaillierte News
     if tier <= 20 or score > 60:
         news, cached = get_finnhub_news_smart(symbol)
         if news:
             sources = ['FH']
-            # Boost Score basierend auf News-Sentiment (hier vereinfacht)
-            for item in news[:1]:  # Top-News
+            for item in news[:1]:
                 if any(word in item['title'].lower() for word in ['bullish', 'upgrade', 'beat', 'growth', 'positive', 'strong']):
                     item['score'] = 15
                 elif any(word in item['title'].lower() for word in ['bearish', 'downgrade', 'miss', 'loss', 'negative', 'weak']):
                     item['score'] = 5
             return news, sources, cached
     
-    # Für niedrigere Tiers: Yahoo Finance News (simuliert durch leere Liste oder Fallback)
     return [], [], False
 
 # ============================== Analyse Funktionen ==============================
@@ -632,7 +655,6 @@ def get_alpha_vantage_smart(symbol):
                 response = safe_requests_get(url, params, timeout=15)
                 if response:
                     data = response.json()
-                    # Check API Limits/Notes
                     if 'Note' in data or 'Information' in data:
                         alpha_manager.limiters[alpha_manager.current_index]['exhausted'] = True
                         alpha_manager.rotate_key()
@@ -670,7 +692,13 @@ def get_alpha_vantage_smart(symbol):
 # ============================== Analyse Funktion ==============================
 def analyze_smart(symbol, tier, total_tickers, market_ctx=None):
     debug_info = {'symbol': symbol, 'tier': tier, 'errors': [], 'checks': {}}
-    # Yahoo Daten mit Retry-Logik
+    
+    # Progressive Pause für höhere Tiers
+    if tier > 50:
+        time.sleep(0.3)
+    if tier > 80:
+        time.sleep(0.6)
+    
     max_retries = 3
     df = None
     last_error = None
@@ -678,7 +706,6 @@ def analyze_smart(symbol, tier, total_tickers, market_ctx=None):
         try:
             ticker = yf.Ticker(symbol)
             df = ticker.history(period='3mo', interval='1d')
-            # Zähle erfolgreich
             stats = st.session_state.get('api_stats', {})
             stats['yahoo'] = stats.get('yahoo', 0) + 1
             st.session_state['api_stats'] = stats
@@ -686,10 +713,11 @@ def analyze_smart(symbol, tier, total_tickers, market_ctx=None):
         except Exception as e:
             last_error = str(e)
             if "Too Many Requests" in last_error or "Rate limit" in last_error:
-                wait_time = (attempt + 1) * 2 + random.uniform(0, 1)
+                wait_time = (attempt + 1) * 3 + random.uniform(0, 2)
                 time.sleep(wait_time)
             else:
                 time.sleep(0.5)
+    
     if df is None or df.empty:
         debug_info['errors'].append(f"Yahoo Fehler: {last_error}")
         _log_scan_debug(debug_info)
@@ -698,16 +726,19 @@ def analyze_smart(symbol, tier, total_tickers, market_ctx=None):
         debug_info['errors'].append(f"Zu wenig Daten: {len(df)}")
         _log_scan_debug(debug_info)
         return None
+    
     df_clean = df.dropna()
     if len(df_clean) < 10:
         debug_info['errors'].append("Zu wenig gültige Daten")
         _log_scan_debug(debug_info)
         return None
+    
     current_price = float(df_clean['Close'].iloc[-1])
     if not np.isfinite(current_price) or current_price <= 0:
         debug_info['errors'].append("Ungültiger Preis")
         _log_scan_debug(debug_info)
         return None
+    
     lookback = min(60, len(df_clean)-5)
     recent = df_clean.tail(lookback)
     recent_high = float(recent['High'].max())
@@ -715,39 +746,43 @@ def analyze_smart(symbol, tier, total_tickers, market_ctx=None):
         debug_info['errors'].append("Kein High")
         _log_scan_debug(debug_info)
         return None
+    
     pullback_pct = (recent_high - current_price) / recent_high
     if pullback_pct < MIN_PULLBACK_PERCENT or pullback_pct > MAX_PULLBACK_PERCENT:
         debug_info['errors'].append(f"Pullback {pullback_pct:.2%} außerhalb Grenzen")
         _log_scan_debug(debug_info)
         return None
-    # Struktur-Analyse
+    
     structure = analyze_structure(df_clean, symbol)
     debug_info['checks']['structure'] = structure.get('structure_intact', False)
     debug_info['checks']['higher_lows'] = structure.get('higher_lows', False)
-    # Akzeptiere nur höhere lows oder HH+HL
+    
     if not structure.get('structure_intact', False) and not structure.get('higher_lows', False):
         debug_info['errors'].append("Kein bullischer Trend")
         _log_scan_debug(debug_info)
         return None
+    
     last_swing_low = structure.get('last_swing_low')
     if last_swing_low is None or not np.isfinite(last_swing_low) or last_swing_low <= 0:
         debug_info['errors'].append("Kein Swing Low")
         _log_scan_debug(debug_info)
         return None
+    
     if current_price < last_swing_low * 0.90:
         debug_info['errors'].append("Preis zu weit unter Swing Low")
         _log_scan_debug(debug_info)
         return None
-    # Score Berechnung
+    
     score = 25
     if structure.get('structure_intact', False):
         score += 15
     elif structure.get('higher_lows', False):
         score += 10
+    
     trend_slope = structure.get('trend_slope', 0)
     if trend_slope is not None and np.isfinite(trend_slope) and trend_slope > 0.005:
         score += 5
-    # Volumen
+    
     avg_vol = df_clean['Volume'].mean()
     current_vol = df_clean['Volume'].iloc[-1]
     rvol = current_vol / avg_vol if avg_vol > 0 else 1.0
@@ -755,19 +790,21 @@ def analyze_smart(symbol, tier, total_tickers, market_ctx=None):
         score += 20
     elif rvol > 1.0:
         score += 10
-    # Support
+    
     support_dist = (current_price - last_swing_low) / current_price if current_price > 0 else 1.0
     if support_dist < 0.03:
         score += 15
     elif support_dist < 0.08:
         score += 8
-    # News & Fundamental
+    
     news, sources, cached_news = analyze_news_tiered(symbol, tier, score)
     if news:
         score += news[0]['score']
+    
     fundamentals, fund_cached = None, False
     if score > 55 and tier <= 10:
         fundamentals, fund_cached = get_alpha_vantage_smart(symbol)
+    
     pe_ratio = None
     if fundamentals:
         pe_ratio = fundamentals.get('pe_ratio')
@@ -776,29 +813,32 @@ def analyze_smart(symbol, tier, total_tickers, market_ctx=None):
                 score += 8
             elif pe_ratio > 100:
                 score -= 5
-    # ATR & SL/TP
+    
     try:
         atr = float((df_clean['High'].rolling(14).max() - df_clean['Low'].rolling(14).min()).mean())
         if not np.isfinite(atr) or atr <= 0:
             atr = current_price * 0.02
     except:
         atr = current_price * 0.02
+    
     stop_loss = max(last_swing_low * 0.97, current_price - (2*atr))
     target = min(recent_high * 0.97, current_price + (current_price - stop_loss)*2)
     if stop_loss <= 0 or stop_loss >= current_price or target <= current_price:
         debug_info['errors'].append("Ungültige SL/TP")
         _log_scan_debug(debug_info)
         return None
+    
     rr_ratio = (target - current_price) / (current_price - stop_loss) if (current_price - stop_loss) > 0 else 0
     if rr_ratio < 1.0:
         debug_info['errors'].append(f"R:R {rr_ratio:.2f} zu niedrig")
         _log_scan_debug(debug_info)
         return None
+    
     if score < 35:
         debug_info['errors'].append(f"Score {score} zu niedrig")
         _log_scan_debug(debug_info)
         return None
-    # Gründe & Zusammenfassung
+    
     reasons = [f"📉 -{pullback_pct:.1%}"]
     if structure.get('structure_intact', False):
         reasons.append("📈 Trend stark")
@@ -812,7 +852,7 @@ def analyze_smart(symbol, tier, total_tickers, market_ctx=None):
         reasons.append(f"📰 {news[0]['source']}")
     if pe_ratio is not None:
         reasons.append(f"{'💰' if pe_ratio<15 else '📊'} PE {pe_ratio:.1f}")
-    # Ergebnis
+    
     return {
         'symbol': symbol,
         'tier': tier,
@@ -945,7 +985,6 @@ def render_card(item, container):
 # ============================== Main ==============================
 clock = get_market_clock()
 
-# Markt-Holidays
 if clock.get('is_holiday'):
     st.markdown(f"""
     <div class="holiday-banner">
@@ -954,7 +993,6 @@ if clock.get('is_holiday'):
     </div>
     """, unsafe_allow_html=True)
 
-# Marktzeit Anzeige
 st.markdown(f"""
 <div class="market-clock-container">
     <div class="market-time">{clock['time']}</div>
@@ -978,7 +1016,7 @@ if st.session_state.get('auto_refresh'):
 with st.sidebar:
     st.header("📡 API Status")
     stats = st.session_state.get('api_stats', {'yahoo':0,'finnhub':0,'alpha_vantage':0,'cache_hits':0,'alpha_rotation_count':0})
-    # Yahoo
+    
     yahoo_calls = stats.get('yahoo', 0)
     st.markdown(f"""
     <div class="info-box">
@@ -987,7 +1025,7 @@ with st.sidebar:
     <small>Unbegrenzt kostenlos</small>
     </div>
     """, unsafe_allow_html=True)
-    # Finnhub
+    
     fh_status = "🟢" if finnhub_limiter.can_call() else "🔴"
     st.markdown(f"""
     <div class="api-stat">
@@ -997,7 +1035,7 @@ with st.sidebar:
         </div>
     </div>
     """, unsafe_allow_html=True)
-    # Alpha Vantage
+    
     alpha_status_list = alpha_manager.get_status()
     all_alpha_exhausted = all(s['exhausted'] for s in alpha_status_list)
     if all_alpha_exhausted:
@@ -1008,6 +1046,7 @@ with st.sidebar:
         Morgen wieder verfügbar
         </div>
         """, unsafe_allow_html=True)
+    
     st.markdown("<div style='margin:10px 0;'><b>Alpha Vantage (25/Tag):</b></div>", unsafe_allow_html=True)
     for status in alpha_status_list:
         cls = "key-active" if status['active'] else "key-exhausted" if status['exhausted'] else ""
@@ -1017,12 +1056,12 @@ with st.sidebar:
             {indicator} Key {status['index']+1}: {status['calls_today']}/25
         </div>
         """, unsafe_allow_html=True)
+    
     rotations = stats.get('alpha_rotation_count',0)
     cache_hits = stats.get('cache_hits',0)
     st.markdown(f'<div style="font-size:0.8rem;margin:5px 0;">🔄 Rotationen: {rotations}</div>', unsafe_allow_html=True)
     st.markdown(f'<div style="font-size:0.8rem;margin:5px 0;">📦 Cache Hits: {cache_hits}</div>', unsafe_allow_html=True)
 
-    # API Tests
     st.divider()
     st.header("🧪 API Tests")
     col1, col2 = st.columns(2)
@@ -1046,7 +1085,7 @@ with st.sidebar:
                 st.success(f"✅ Finnhub OK! {len(news)} News")
             else:
                 st.error("❌ Keine News")
-    # Manuelle Abfrage
+    
     st.divider()
     st.header("🔍 Manuelle Abfrage")
     manual_symbol = st.text_input("Symbol:", placeholder="z.B. NVDA", key="manual").upper()
@@ -1070,6 +1109,7 @@ with st.sidebar:
                     last = scan_debug[-1]
                     st.write("Checks:", last.get('checks', {}))
                     st.write("Fehler:", last.get('errors', []))
+    
     if st.button("🔄 Stats zurücksetzen"):
         st.session_state['api_stats'] = {'yahoo':0,'finnhub':0,'alpha_vantage':0,'cache_hits':0,'alpha_rotation_count':0}
         st.session_state['scan_debug'] = []
@@ -1090,6 +1130,7 @@ if scan_triggered:
         market_ctx = get_market_context()
         if market_ctx.get('market_closed'):
             st.warning("⚠️ Markt ist möglicherweise geschlossen.")
+        
         st.session_state['scan_debug'] = []
         results = []
         progress = st.progress(0)
@@ -1099,7 +1140,6 @@ if scan_triggered:
         scan_list = [(s, '📋') for s in st.session_state['watchlist']]
         seen = set(st.session_state['watchlist'])
 
-        # Gainers von Yahoo
         try:
             headers = {'User-Agent':'Mozilla/5.0'}
             r = requests.get('https://finance.yahoo.com/gainers', headers=headers, timeout=10)
@@ -1117,6 +1157,7 @@ if scan_triggered:
         for i, (sym, _) in enumerate(scan_list):
             tier = i + 1
             status_text.text(f"Analysiere: {sym} ({tier}/{len(scan_list)}) - OK:{success_count} Fehler:{error_count}")
+            
             try:
                 res = analyze_smart(sym, tier, len(scan_list), market_ctx)
                 if res:
@@ -1129,15 +1170,20 @@ if scan_triggered:
                     error_count += 1
             except:
                 error_count += 1
+            
             progress.progress((i+1)/len(scan_list))
-            if i % 5 == 0 and i > 0:
-                time.sleep(1.0)
+            
+            # VERBESSERTES Rate Limiting
+            if i % 3 == 0 and i > 0:
+                time.sleep(1.5)
+            if i % 10 == 0 and i > 0:
+                time.sleep(3.0)
+        
         progress.empty()
         status_text.empty()
         st.session_state['scan_results'] = results
         st.session_state['last_scan_time'] = datetime.now()
 
-        # Alerts
         alerts_sent_this_scan = 0
         for item in results:
             if item['score'] > 75:
@@ -1172,28 +1218,33 @@ if results:
             last_time = st.session_state.get('last_scan_time')
             if last_time:
                 st.caption(f"Letzter Scan: {last_time.strftime('%H:%M:%S')}")
+    
     sent_alerts = st.session_state.get('sent_alerts', {})
     active_alerts = len([a for a in sent_alerts.values() if (datetime.now() - a['timestamp']).total_seconds() / 3600 < 24])
     st.info(f"📱 Aktive Alerts (24h): {active_alerts} | In Cooldown: {len(sent_alerts) - active_alerts}")
+    
     stats = st.session_state.get('api_stats', {})
     api_summary = {}
     for r in results:
         for s in r.get('api_sources', []):
             api_summary[s] = api_summary.get(s, 0) + 1
     cache_count = sum(1 for r in results if r.get('from_cache'))
+    
     st.metric("Setups", len(results))
     st.metric("Yahoo Calls", stats.get('yahoo', 0))
     st.metric("Finnhub", stats.get('finnhub', 0))
     st.metric("Alpha Vantage", stats.get('alpha_vantage', 0))
     st.success(f"✅ APIs in Ergebnissen: {api_summary} | Cache: {cache_count}")
-    # Ergebnisse grid
+    
     def render_results_grid(results):
         results_sorted = sorted(results, key=lambda x: (x['score'], x['pullback_pct']), reverse=True)
         cols = st.columns(4)
         for i, r in enumerate(results_sorted[:16]):
             with cols[i % 4]:
                 render_card(r, st.container())
+    
     render_results_grid(results)
+    
     with st.expander("📡 API Details"):
         st.write(f"**Yahoo Finance:** {stats.get('yahoo', 0)} Calls (unbegrenzt)")
         st.write(f"**Finnhub:** {finnhub_limiter.get_status()}/60 pro Minute")
@@ -1205,13 +1256,12 @@ if results:
         for symbol, alert in list(st.session_state.get('sent_alerts', {}).items())[:5]:
             ago = int((datetime.now() - alert['timestamp']).total_seconds() / 60)
             st.write(f"  • {symbol}: {alert['setup_type']} vor {ago}min @ ${alert['price']:.2f}")
+
 alerts = st.session_state.get('sent_alerts', {})
 if alerts:
-    # Code um Alerts anzuzeigen
     st.write("**Letzte Alerts:**")
     for symbol, alert in list(alerts.items())[:5]:
         ago = int((datetime.now() - alert['timestamp']).total_seconds() / 60)
         st.write(f"  • {symbol}: {alert['setup_type']} vor {ago}min @ ${alert['price']:.2f}")
 else:
-    # Dieser Block ist eingerückt
-    st.info("👆 Klicke 'Smart Scan Starten' um die Watchlist zu analysieren!") 
+    st.info("👆 Klicke 'Smart Scan Starten' um die Watchlist zu analysieren!")
