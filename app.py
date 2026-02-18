@@ -1,6 +1,6 @@
 """
 Elite Bull Scanner Pro V7.2 - Vollständige Version mit ThreadPool & Gemini AI Integration
-Kein aiohttp nötig, nutzt concurrent.futures für Parallelisierung
+Inklusive Streamlit Context-Fix für Threading
 """
 
 import streamlit as st
@@ -23,6 +23,7 @@ import json
 import threading
 import numpy as np
 from google import genai
+from streamlit.runtime.scriptrunner import add_script_run_ctx, get_script_run_ctx
 
 warnings.filterwarnings('ignore')
 logging.basicConfig(level=logging.INFO)
@@ -291,13 +292,10 @@ try:
     ALPHA_VANTAGE_KEYS = st.secrets["alpha_vantage"]["keys"]
 except Exception as e:
     logger.warning(f"Secrets nicht gefunden: {e}")
-    TELEGRAM_BOT_TOKEN = "8317204351:AAHRu-mYYU0_NRIxNGEQ5voneIQaDKeQuF8"
-    TELEGRAM_CHAT_ID = "5338135874"
-    FINNHUB_API_KEY = "d652vnpr01qqbln5m9cgd652vnpr01qqbln5m9d0"
-    ALPHA_VANTAGE_KEYS = ["N6PM9UCXL55JZTN9",
-    "4ebfbdb3c8374c99abbf259c168d93c1",
-    "6898e81a60be40a092710d0349f95110",
-    ]
+    TELEGRAM_BOT_TOKEN = ""
+    TELEGRAM_CHAT_ID = ""
+    FINNHUB_API_KEY = ""
+    ALPHA_VANTAGE_KEYS = []
 
 DEFAULT_WATCHLIST = sorted(list(set([
     "NVDA", "TSLA", "AMD", "PLTR", "COIN", "MSTR", "HOOD", "CRWD", "AAPL", "MSFT", 
@@ -874,7 +872,6 @@ def get_gemini_entry_analysis(item_data: dict) -> str:
     if "gemini" not in st.secrets or "api_key" not in st.secrets["gemini"]:
         return "⚠️ Gemini API-Key fehlt in den Secrets. Bitte eintragen."
         
-    # Neuester Standard für den Gemini Client
     client = genai.Client(api_key=st.secrets["gemini"]["api_key"])
     
     prompt = f"""
@@ -893,7 +890,6 @@ def get_gemini_entry_analysis(item_data: dict) -> str:
     """
     
     try:
-        # Wir nutzen das brandneue und extrem schnelle gemini-2.5-flash Modell
         response = client.models.generate_content(
             model='gemini-2.5-flash',
             contents=prompt,
@@ -907,7 +903,6 @@ def get_gemini_entry_analysis(item_data: dict) -> str:
 class ThreadPoolBullScanner:
     """
     ThreadPool-basierter Scanner mit Rate-Limiting
-    4 Worker × 1s Delay = effektiv 4 Calls/s (sicher für Yahoo)
     """
     
     def __init__(self, max_workers: int = 4, min_delay: float = 1.0):
@@ -1113,15 +1108,26 @@ class ThreadPoolBullScanner:
         }
     
     def scan_batch(self, symbols: List[Tuple[str, SourceType]], progress_callback=None) -> List[Dict]:
-        """Haupt-Scan mit ThreadPool"""
+        """Haupt-Scan mit ThreadPool und Streamlit Context"""
         results = []
         completed = 0
         error_count = 0
         success_count = 0
         
+        # Holen des aktuellen Streamlit-Kontexts für die Threads
+        try:
+            ctx = get_script_run_ctx()
+        except:
+            ctx = None
+            
+        def wrapper(sym, tier, total):
+            if ctx:
+                add_script_run_ctx(threading.current_thread(), ctx)
+            return self.analyze_single_symbol(sym, tier, total)
+        
         with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
             future_to_symbol = {
-                executor.submit(self.analyze_single_symbol, sym, i+1, len(symbols)): (sym, src) 
+                executor.submit(wrapper, sym, i+1, len(symbols)): (sym, src) 
                 for i, (sym, src) in enumerate(symbols)
             }
             
