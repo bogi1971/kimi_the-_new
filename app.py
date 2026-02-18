@@ -327,17 +327,17 @@ ALERT_COOLDOWN_MINUTES = 60
 # ============================================
 
 # Telegram Configuration
-TELEGRAM_BOT_TOKEN = "123456789:ABCdefGHIjklMNOpqrSTUvwxyz123456789"
-TELEGRAM_CHAT_ID = "123456789"
+TELEGRAM_BOT_TOKEN = "8317204351:AAHRu-mYYU0_NRIxNGEQ5voneIQaDKeQuF8"  # <-- DEIN BOT TOKEN HIER
+TELEGRAM_CHAT_ID = "5338135874"  # <-- DEINE CHAT ID HIER
 
 # Finnhub API Key (kostenlos auf finnhub.io)
-FINNHUB_API_KEY = "c1234567890abcdef1234567890abcdef12345678"
+FINNHUB_API_KEY = "d652vnpr01qqbln5m9cgd652vnpr01qqbln5m9d0"# <-- DEIN FINNHUB KEY HIER
 
 # Alpha Vantage API Keys (kostenlos auf alphavantage.co - bis zu 3 Keys für 75 Calls/Tag)
 ALPHA_VANTAGE_KEYS = [
-    "A1B2C3D4E5F6G7H8",
-    "I9J0K1L2M3N4O5P6",
-    "Q7R8S9T0U1V2W3X4"
+    "N6PM9UCXL55JZTN9",  # <-- KEY 1 HIER
+    "4ebfbdb3c8374c99abbf259c168d93c1",      # <-- KEY 2 HIER (optional)
+    "6898e81a60be40a092710d0349f95110",       # <-- KEY 3 HIER (optional)
 ]
 
 DEFAULT_WATCHLIST = sorted(list(set([
