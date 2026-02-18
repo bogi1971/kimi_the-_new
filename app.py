@@ -307,7 +307,7 @@ TELEGRAM_BOT_TOKEN = "8317204351:AAHRu-mYYU0_NRIxNGEQ5voneIQaDKeQuF8"  # <-- DEI
 TELEGRAM_CHAT_ID = "5338135874"  # <-- DEINE CHAT ID HIER
 
 # Finnhub API Key (kostenlos auf finnhub.io)
-FINNHUB_API_KEY = "c1234567890abcdef1234567890abcdef12345678"  # <-- DEIN FINNHUB KEY HIER
+FINNHUB_API_KEY = "d652vnpr01qqbln5m9cgd652vnpr01qqbln5m9d0"# <-- DEIN FINNHUB KEY HIER
 
 # Alpha Vantage API Keys (kostenlos auf alphavantage.co - bis zu 3 Keys für 75 Calls/Tag)
 ALPHA_VANTAGE_KEYS = [
