@@ -1,6 +1,6 @@
 """
 Elite Bull Scanner Pro V7.2 - Vollständige Version mit ThreadPool & Gemini AI Integration
-Inklusive Streamlit Context-Fix für Threading
+Inklusive Streamlit Context-Fix für Threading und behobenem KI-Prompt-Fehler
 """
 
 import streamlit as st
@@ -874,6 +874,10 @@ def get_gemini_entry_analysis(item_data: dict) -> str:
         
     client = genai.Client(api_key=st.secrets["gemini"]["api_key"])
     
+    # FIX: News sicher auslesen, bevor der Text für die KI gebaut wird
+    news_list = item_data.get('news', [])
+    news_title = news_list[0].get('title', 'Keine relevanten News') if news_list else 'Keine relevanten News'
+    
     prompt = f"""
     Du bist ein professioneller Daytrader. Analysiere folgendes Setup für einen kurzfristigen Long-Einstieg:
     Ticker: {item_data['symbol']}
@@ -882,7 +886,7 @@ def get_gemini_entry_analysis(item_data: dict) -> str:
     Geplanter Stop Loss: ${item_data['stop_loss']:.2f}
     Geplantes Target: ${item_data['target']:.2f}
     Rel. Volumen (RVol): {item_data['rvol']:.1f}x
-    News Catalyst: {item_data.get('news', [{{}}])[0].get('title', 'Keine relevanten News')}
+    News Catalyst: {news_title}
 
     Gib mir eine extrem präzise Einschätzung (max. 3 Sätze): 
     1. Wie bewertest du das CRV (R:R) und die Volatilität?
