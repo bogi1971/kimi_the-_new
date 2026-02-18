@@ -22,8 +22,8 @@ import os
 import json
 import threading
 import numpy as np
-import google.generativeai as genai
 from google import genai
+
 warnings.filterwarnings('ignore')
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -291,10 +291,13 @@ try:
     ALPHA_VANTAGE_KEYS = st.secrets["alpha_vantage"]["keys"]
 except Exception as e:
     logger.warning(f"Secrets nicht gefunden: {e}")
-    TELEGRAM_BOT_TOKEN = ""
-    TELEGRAM_CHAT_ID = ""
-    FINNHUB_API_KEY = ""
-    ALPHA_VANTAGE_KEYS = []
+    TELEGRAM_BOT_TOKEN = "8317204351:AAHRu-mYYU0_NRIxNGEQ5voneIQaDKeQuF8"
+    TELEGRAM_CHAT_ID = "5338135874"
+    FINNHUB_API_KEY = "d652vnpr01qqbln5m9cgd652vnpr01qqbln5m9d0"
+    ALPHA_VANTAGE_KEYS = ["N6PM9UCXL55JZTN9",
+    "4ebfbdb3c8374c99abbf259c168d93c1",
+    "6898e81a60be40a092710d0349f95110",
+    ]
 
 DEFAULT_WATCHLIST = sorted(list(set([
     "NVDA", "TSLA", "AMD", "PLTR", "COIN", "MSTR", "HOOD", "CRWD", "AAPL", "MSFT", 
@@ -871,9 +874,8 @@ def get_gemini_entry_analysis(item_data: dict) -> str:
     if "gemini" not in st.secrets or "api_key" not in st.secrets["gemini"]:
         return "⚠️ Gemini API-Key fehlt in den Secrets. Bitte eintragen."
         
-    genai.configure(api_key=st.secrets["gemini"]["api_key"])
-    
-    model = genai.GenerativeModel('gemini-1.5-flash')
+    # Neuester Standard für den Gemini Client
+    client = genai.Client(api_key=st.secrets["gemini"]["api_key"])
     
     prompt = f"""
     Du bist ein professioneller Daytrader. Analysiere folgendes Setup für einen kurzfristigen Long-Einstieg:
@@ -891,7 +893,11 @@ def get_gemini_entry_analysis(item_data: dict) -> str:
     """
     
     try:
-        response = model.generate_content(prompt)
+        # Wir nutzen das brandneue und extrem schnelle gemini-2.5-flash Modell
+        response = client.models.generate_content(
+            model='gemini-2.5-flash',
+            contents=prompt,
+        )
         return response.text.strip()
     except Exception as e:
         return f"❌ Gemini API Fehler: {str(e)}"
