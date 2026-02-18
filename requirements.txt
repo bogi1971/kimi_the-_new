@@ -5,3 +5,4 @@ numpy
 requests
 pytz
 scipy
+google-generativeai
