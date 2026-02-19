@@ -1,7 +1,7 @@
 """
 Elite Bull Scanner Pro V7.2 - Vollständige Version mit ThreadPool & Gemini AI Integration
 Inklusive Streamlit Context-Fix, KI-Prompt-Fix und OHNE "Losers" (Nur Momentum)
-15-Minuten Scan-Intervall
+1-Stunden Scan-Intervall
 """
 
 import streamlit as st
@@ -278,7 +278,7 @@ st.set_page_config(layout="wide", page_title="Elite Bull Scanner Pro V7.2", page
 # Filter Einstellungen
 MIN_PULLBACK_PERCENT = 0.05
 MAX_PULLBACK_PERCENT = 0.50
-AUTO_REFRESH_INTERVAL = 900  # 15-Minuten-Takt für das Daytrading
+AUTO_REFRESH_INTERVAL = 3600  # 1-Stunden-Takt für Markt-Updates/News
 ALERT_COOLDOWN_MINUTES = 60
 MIN_SCORE_THRESHOLD = 60
 MAX_WATCHLIST_SIZE = 100
@@ -597,7 +597,7 @@ def fetch_yahoo_movers() -> Tuple[Dict[str, List[str]], str]:
             logger.error(f"Fehler beim Laden {category}: {e}")
             continue
     
-    if success_count >= 1: # Erfordert mindestens einen erfolgreichen Load
+    if success_count >= 1: 
         movers_cache.set(cache_key, movers)
         return movers, 'yahoo'
     else:
@@ -862,14 +862,11 @@ def get_alpha_vantage_smart(symbol: str) -> Tuple[Optional[Dict], bool]:
 # ============================== Gemini AI Integration ==============================
 
 def get_gemini_entry_analysis(item_data: dict) -> str:
-    """Fragt die Gemini API nach einer konkreten Einstiegseinschätzung."""
-    
     if "gemini" not in st.secrets or "api_key" not in st.secrets["gemini"]:
         return "⚠️ Gemini API-Key fehlt in den Secrets. Bitte eintragen."
         
     client = genai.Client(api_key=st.secrets["gemini"]["api_key"])
     
-    # FIX: News sicher auslesen, bevor der Text für die KI gebaut wird
     news_list = item_data.get('news', [])
     news_title = news_list[0].get('title', 'Keine relevanten News') if news_list else 'Keine relevanten News'
     
@@ -912,20 +909,25 @@ class ThreadPoolBullScanner:
         self._yahoo_cache = SmartCache()
         
     def _fetch_yahoo_with_rate_limit(self, symbol: str) -> Optional[pd.DataFrame]:
-        """Thread-sicheres Yahoo Fetching mit Rate-Limiting"""
+        """Thread-sicheres Yahoo Fetching mit Rate-Limiting (Lock nur auf Limit-Check)"""
         cache_key = f"yh_{symbol}"
         cached = self._yahoo_cache.get(cache_key, 300)
         if cached is not None:
             return cached
         
+        # 1. FIX: Der Lock umfasst nur noch die Zeitberechnung für das Rate-Limiting.
         with self._yahoo_lock:
             now = time.time()
             time_since_last = now - self._last_yahoo_call
             if time_since_last < self.min_delay:
                 sleep_time = self.min_delay - time_since_last
                 time.sleep(sleep_time)
-            self._last_yahoo_call = time.time()
+                self._last_yahoo_call = time.time()
+            else:
+                self._last_yahoo_call = now
         
+        # 2. FIX: Der eigentliche Netzwerk-Call läuft jetzt komplett außerhalb des Locks. 
+        # Alle 4 Threads können nun parallel HTTP-Requests absetzen.
         try:
             df = yf.Ticker(symbol).history(period='3mo', interval='1d')
             stats = st.session_state.get('api_stats', {})
@@ -941,7 +943,6 @@ class ThreadPoolBullScanner:
         return None
     
     def analyze_single_symbol(self, symbol: str, tier: int, total: int) -> Optional[Dict[str, Any]]:
-        """Analysiert ein einzelnes Symbol"""
         debug_info = {'symbol': symbol, 'tier': tier, 'errors': [], 'checks': {}}
         
         if tier > 30:
@@ -1107,13 +1108,11 @@ class ThreadPoolBullScanner:
         }
     
     def scan_batch(self, symbols: List[Tuple[str, SourceType]], progress_callback=None) -> List[Dict]:
-        """Haupt-Scan mit ThreadPool und Streamlit Context"""
         results = []
         completed = 0
         error_count = 0
         success_count = 0
         
-        # Holen des aktuellen Streamlit-Kontexts für die Threads
         try:
             ctx = get_script_run_ctx()
         except:
@@ -1258,7 +1257,7 @@ def render_card_html(item: Dict) -> str:
     source_html = source_badges.get(source, '')
     
     return f"""
-    <div class="bull-card source-{source.value}">
+    <div class="bull-card source-{source.value if hasattr(source, 'value') else str(source)}">
         <div style="display:flex; justify-content:space-between; align-items:center;">
             <h3 style="margin:0;">🐂 {sym}</h3>
             {source_html}
@@ -1284,8 +1283,9 @@ def render_card(item: Dict, container):
     with container:
         st.markdown(html, unsafe_allow_html=True)
         
-        # Der Gemini-Button direkt unter der HTML-Karte
-        if st.button(f"🤖 Gemini Einstiegs-Check", key=f"gemini_btn_{item['symbol']}"):
+        # 3. FIX: Eindeutiger Key (Symbol + Source + Score), um Streamlit Duplicate-Errors zu vermeiden
+        unique_btn_key = f"gemini_btn_{item['symbol']}_{item.get('source', SourceType.UNKNOWN)}_{item.get('score', 0)}"
+        if st.button(f"🤖 Gemini Einstiegs-Check", key=unique_btn_key):
             with st.spinner(f"Gemini analysiert Orderflow für {item['symbol']}..."):
                 analysis = get_gemini_entry_analysis(item)
                 st.info(analysis, icon="💡")
@@ -1528,7 +1528,7 @@ def main():
             def update_progress(completed, total, success, errors, current_sym, current_src):
                 progress = completed / total
                 progress_bar.progress(min(progress, 0.99))
-                status_text.text(f"Analysiere: {current_sym} [{current_src.value}] ({completed}/{total}) - OK:{success} Fehler:{errors}")
+                status_text.text(f"Analysiere: {current_sym} [{current_src.value if hasattr(current_src, 'value') else str(current_src)}] ({completed}/{total}) - OK:{success} Fehler:{errors}")
             
             # Führe Scan aus
             start_time = time.time()
@@ -1575,7 +1575,8 @@ def main():
             sources = {}
             for r in results:
                 src = r.get('source', SourceType.UNKNOWN)
-                sources[src.value if hasattr(src, 'value') else str(src)] = sources.get(src.value if hasattr(src, 'value') else str(src), 0) + 1
+                src_val = src.value if hasattr(src, 'value') else str(src)
+                sources[src_val] = sources.get(src_val, 0) + 1
             source_text = " | ".join([f"{k}: {v}" for k, v in sources.items()])
             st.caption(f"Quellen: {source_text}")
         with col3:
