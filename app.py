@@ -1,7 +1,7 @@
 """
 Elite Bull Scanner Pro V7.2 - Vollständige Version mit ThreadPool & Gemini AI Integration
 Inklusive Streamlit Context-Fix, KI-Prompt-Fix und OHNE "Losers" (Nur Momentum)
-Inklusive yfinance Session-Fix gegen HTTP 429 (Too Many Requests) Fehler
+Inklusive yfinance Retry/Backoff-Fix gegen HTTP 429 (Too Many Requests) Fehler
 1-Stunden Scan-Intervall
 """
 
@@ -522,13 +522,8 @@ def get_market_context() -> Dict[str, Any]:
     try:
         time.sleep(1)
         
-        # FIX: Requests Session mit User-Agent für Yahoo Finance verwenden
-        session = requests.Session()
-        session.headers.update({
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
-        })
-        
-        spy = yf.Ticker("SPY", session=session)
+        # FIX: Zurück zum Standard-Ticker OHNE custom session, dafür mit Retry falls nötig
+        spy = yf.Ticker("SPY")
         spy_data = spy.history(period="5d")
         
         if len(spy_data) < 2:
@@ -542,7 +537,7 @@ def get_market_context() -> Dict[str, Any]:
         if abs(spy_change) > 0.01:
             try:
                 time.sleep(0.5)
-                vix = yf.Ticker("^VIX", session=session)
+                vix = yf.Ticker("^VIX")
                 vix_data = vix.history(period="2d")
                 vix_level = vix_data['Close'].iloc[-1] if not vix_data.empty else 20
             except:
@@ -907,7 +902,7 @@ def get_gemini_entry_analysis(item_data: dict) -> str:
 
 class ThreadPoolBullScanner:
     """
-    ThreadPool-basierter Scanner mit Rate-Limiting
+    ThreadPool-basierter Scanner mit Rate-Limiting & Exponential Backoff
     """
     
     def __init__(self, max_workers: int = 4, min_delay: float = 1.0):
@@ -918,41 +913,42 @@ class ThreadPoolBullScanner:
         self._yahoo_cache = SmartCache()
         
     def _fetch_yahoo_with_rate_limit(self, symbol: str) -> Optional[pd.DataFrame]:
-        """Thread-sicheres Yahoo Fetching mit Rate-Limiting (Lock nur auf Limit-Check)"""
         cache_key = f"yh_{symbol}"
         cached = self._yahoo_cache.get(cache_key, 300)
         if cached is not None:
             return cached
         
-        # 1. FIX: Der Lock umfasst nur noch die Zeitberechnung für das Rate-Limiting.
+        # Rate-Limit-Wartezeit global erzwingen
         with self._yahoo_lock:
             now = time.time()
             time_since_last = now - self._last_yahoo_call
             if time_since_last < self.min_delay:
-                sleep_time = self.min_delay - time_since_last
-                time.sleep(sleep_time)
-                self._last_yahoo_call = time.time()
-            else:
-                self._last_yahoo_call = now
+                time.sleep(self.min_delay - time_since_last)
+            self._last_yahoo_call = time.time()
         
-        # 2. FIX: Der eigentliche Netzwerk-Call läuft jetzt komplett außerhalb des Locks. 
-        # FIX für 429: Session mit User-Agent hinzufügen
-        try:
-            session = requests.Session()
-            session.headers.update({
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
-            })
-            df = yf.Ticker(symbol, session=session).history(period='3mo', interval='1d')
-            
-            stats = st.session_state.get('api_stats', {})
-            stats['yahoo'] = stats.get('yahoo', 0) + 1
-            st.session_state['api_stats'] = stats
-            
-            if not df.empty:
-                self._yahoo_cache.set(cache_key, df)
-                return df
-        except Exception as e:
-            logger.error(f"Yahoo Fehler für {symbol}: {e}")
+        # Retry-Logik mit Exponential Backoff (1s, 2s, 4s)
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                # Kein custom session Parameter mehr, damit yfinance seinen eigenen Crumb nutzen kann!
+                df = yf.Ticker(symbol).history(period='3mo', interval='1d')
+                
+                if not df.empty:
+                    stats = st.session_state.get('api_stats', {})
+                    stats['yahoo'] = stats.get('yahoo', 0) + 1
+                    st.session_state['api_stats'] = stats
+                    
+                    self._yahoo_cache.set(cache_key, df)
+                    return df
+                break # Wenn leer aber kein Fehler -> einfach beenden
+                
+            except Exception as e:
+                # Bei Fehler (z.B. 429) warten und neu versuchen
+                if attempt < max_retries - 1:
+                    sleep_time = 2 ** attempt
+                    time.sleep(sleep_time)
+                else:
+                    logger.error(f"Yahoo Fehler für {symbol}: {e}")
             
         return None
     
@@ -966,7 +962,7 @@ class ThreadPoolBullScanner:
         
         df = self._fetch_yahoo_with_rate_limit(symbol)
         if df is None or df.empty:
-            debug_info['errors'].append("Yahoo Fehler")
+            debug_info['errors'].append("Yahoo Fehler / Empty Data")
             _log_scan_debug(debug_info)
             return None
         if len(df) < 15:
@@ -1297,7 +1293,6 @@ def render_card(item: Dict, container):
     with container:
         st.markdown(html, unsafe_allow_html=True)
         
-        # 3. FIX: Eindeutiger Key (Symbol + Source + Score), um Streamlit Duplicate-Errors zu vermeiden
         unique_btn_key = f"gemini_btn_{item['symbol']}_{item.get('source', SourceType.UNKNOWN)}_{item.get('score', 0)}"
         if st.button(f"🤖 Gemini Einstiegs-Check", key=unique_btn_key):
             with st.spinner(f"Gemini analysiert Orderflow für {item['symbol']}..."):
@@ -1431,12 +1426,8 @@ def main():
             if st.button("Test Yahoo", use_container_width=True):
                 try:
                     time.sleep(1)
-                    # FIX: Requests Session mit User-Agent auch im Test-Button verwenden
-                    session = requests.Session()
-                    session.headers.update({
-                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
-                    })
-                    data = yf.Ticker("AAPL", session=session).history(period="5d")
+                    # FIX: Ohne Custom Session, wie oben beschrieben
+                    data = yf.Ticker("AAPL").history(period="5d")
                     if not data.empty:
                         st.success(f"✅ Yahoo OK! {len(data)} Tage")
                         stats = st.session_state.get('api_stats', {})
