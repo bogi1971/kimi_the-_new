@@ -1,6 +1,7 @@
 """
 Elite Bull Scanner Pro V7.2 - Vollständige Version mit ThreadPool & Gemini AI Integration
 Inklusive Streamlit Context-Fix, KI-Prompt-Fix und OHNE "Losers" (Nur Momentum)
+Inklusive yfinance Session-Fix gegen HTTP 429 (Too Many Requests) Fehler
 1-Stunden Scan-Intervall
 """
 
@@ -520,8 +521,16 @@ def get_market_context() -> Dict[str, Any]:
     
     try:
         time.sleep(1)
-        spy = yf.Ticker("SPY")
+        
+        # FIX: Requests Session mit User-Agent für Yahoo Finance verwenden
+        session = requests.Session()
+        session.headers.update({
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+        })
+        
+        spy = yf.Ticker("SPY", session=session)
         spy_data = spy.history(period="5d")
+        
         if len(spy_data) < 2:
             result = {'risk_off': False, 'spy_change': 0, 'market_closed': True}
             market_context_cache.set(cache_key, result)
@@ -533,7 +542,7 @@ def get_market_context() -> Dict[str, Any]:
         if abs(spy_change) > 0.01:
             try:
                 time.sleep(0.5)
-                vix = yf.Ticker("^VIX")
+                vix = yf.Ticker("^VIX", session=session)
                 vix_data = vix.history(period="2d")
                 vix_level = vix_data['Close'].iloc[-1] if not vix_data.empty else 20
             except:
@@ -565,7 +574,7 @@ def fetch_yahoo_movers() -> Tuple[Dict[str, List[str]], str]:
     
     movers = {'gainers': [], 'most_active': []}
     headers = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
     }
     
     urls = {
@@ -927,9 +936,14 @@ class ThreadPoolBullScanner:
                 self._last_yahoo_call = now
         
         # 2. FIX: Der eigentliche Netzwerk-Call läuft jetzt komplett außerhalb des Locks. 
-        # Alle 4 Threads können nun parallel HTTP-Requests absetzen.
+        # FIX für 429: Session mit User-Agent hinzufügen
         try:
-            df = yf.Ticker(symbol).history(period='3mo', interval='1d')
+            session = requests.Session()
+            session.headers.update({
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+            })
+            df = yf.Ticker(symbol, session=session).history(period='3mo', interval='1d')
+            
             stats = st.session_state.get('api_stats', {})
             stats['yahoo'] = stats.get('yahoo', 0) + 1
             st.session_state['api_stats'] = stats
@@ -1417,7 +1431,12 @@ def main():
             if st.button("Test Yahoo", use_container_width=True):
                 try:
                     time.sleep(1)
-                    data = yf.Ticker("AAPL").history(period="5d")
+                    # FIX: Requests Session mit User-Agent auch im Test-Button verwenden
+                    session = requests.Session()
+                    session.headers.update({
+                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+                    })
+                    data = yf.Ticker("AAPL", session=session).history(period="5d")
                     if not data.empty:
                         st.success(f"✅ Yahoo OK! {len(data)} Tage")
                         stats = st.session_state.get('api_stats', {})
