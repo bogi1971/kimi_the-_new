@@ -2,6 +2,7 @@
 Elite Bull Scanner Pro V7.2 - Vollständige Version mit ThreadPool & Gemini AI Integration
 Inklusive Streamlit Context-Fix, KI-Prompt-Fix und OHNE "Losers" (Nur Momentum)
 Inklusive yfinance Retry/Backoff-Fix gegen HTTP 429 (Too Many Requests) Fehler
+Inklusive Finnhub Multi-Key Load Balancer
 1-Stunden Scan-Intervall
 """
 
@@ -288,13 +289,13 @@ MAX_WATCHLIST_SIZE = 100
 try:
     TELEGRAM_BOT_TOKEN = st.secrets["telegram"]["bot_token"]
     TELEGRAM_CHAT_ID = st.secrets["telegram"]["chat_id"]
-    FINNHUB_API_KEY = st.secrets["finnhub"]["api_key"]
+    FINNHUB_KEYS = st.secrets["finnhub"]["keys"]  # Jetzt als Liste!
     ALPHA_VANTAGE_KEYS = st.secrets["alpha_vantage"]["keys"]
 except Exception as e:
-    logger.warning(f"Secrets nicht gefunden: {e}")
+    logger.warning(f"Secrets nicht gefunden oder unvollständig: {e}")
     TELEGRAM_BOT_TOKEN = ""
     TELEGRAM_CHAT_ID = ""
-    FINNHUB_API_KEY = ""
+    FINNHUB_KEYS = []
     ALPHA_VANTAGE_KEYS = []
 
 DEFAULT_WATCHLIST = sorted(list(set([
@@ -521,8 +522,6 @@ def get_market_context() -> Dict[str, Any]:
     
     try:
         time.sleep(1)
-        
-        # FIX: Zurück zum Standard-Ticker OHNE custom session, dafür mit Retry falls nötig
         spy = yf.Ticker("SPY")
         spy_data = spy.history(period="5d")
         
@@ -651,8 +650,10 @@ def get_finnhub_news_smart(symbol: str) -> Tuple[Optional[List[Dict]], bool]:
             st.session_state['api_stats'] = stats
         return cached, True
     
-    if not FINNHUB_API_KEY or len(FINNHUB_API_KEY) < 10:
+    if not FINNHUB_KEYS:
         return None, False
+        
+    current_finnhub_key = random.choice(FINNHUB_KEYS)
     
     if not finnhub_limiter.can_call():
         return None, False
@@ -663,7 +664,7 @@ def get_finnhub_news_smart(symbol: str) -> Tuple[Optional[List[Dict]], bool]:
             'symbol': symbol,
             'from': (datetime.now() - timedelta(days=7)).strftime('%Y-%m-%d'),
             'to': datetime.now().strftime('%Y-%m-%d'),
-            'token': FINNHUB_API_KEY
+            'token': current_finnhub_key
         }
         response = safe_requests_get(url, params, timeout=10)
         if response:
@@ -1426,7 +1427,6 @@ def main():
             if st.button("Test Yahoo", use_container_width=True):
                 try:
                     time.sleep(1)
-                    # FIX: Ohne Custom Session, wie oben beschrieben
                     data = yf.Ticker("AAPL").history(period="5d")
                     if not data.empty:
                         st.success(f"✅ Yahoo OK! {len(data)} Tage")
