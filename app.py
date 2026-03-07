@@ -1668,7 +1668,7 @@ def render_card(item: Dict, container):
     with container:
         st.markdown(html, unsafe_allow_html=True)
         
-        unique_btn_key = f"gemini_btn_{item['symbol']}_{item.get('source', SourceType.UNKNOWN)}_{item.get('score', 0)}_{int(time.time())}"
+        unique_btn_key = f"gemini_btn_{item['symbol']}"
         if st.button(f"🤖 Gemini Einstiegs-Check", key=unique_btn_key):
             with st.spinner(f"Gemini analysiert Orderflow für {item['symbol']}..."):
                 analysis = get_gemini_entry_analysis(item)
