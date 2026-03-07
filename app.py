@@ -1503,7 +1503,6 @@ class ThreadPoolBullScanner:
         
         return sorted(results, key=lambda x: (x['score'], x['pullback_pct']), reverse=True)
 
-def _log_scan
 def _log_scan_debug(debug_info: Dict):
     scan_debug = st.session_state.get('scan_debug', [])
     scan_debug.append(debug_info)
