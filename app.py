@@ -1167,9 +1167,9 @@ def get_gemini_entry_analysis(item_data: dict) -> str:
     news_title = news_list[0].get('title', 'Keine relevanten News') if news_list else 'Keine relevanten News'
     
     # NEU: Candlestick-Info einbinden
-    candle = item_data.get('candlestick', {})
-    candle_desc = candle.get('description', 'Kein Signal')
-    candle_quality = candle.get('entry_quality', 'weak')
+    candle = item_data.get('candlestick')
+    candle_desc = candle.description if candle else 'Kein Signal'
+    candle_quality = candle.entry_quality if candle else 'weak'
     
     prompt = f"""
     Du bist ein professioneller Daytrader. Analysiere folgendes Setup für einen kurzfristigen Long-Einstieg:
