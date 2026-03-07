@@ -1,0 +1,15 @@
+# .streamlit/secrets.toml
+
+[telegram]
+bot_token = "8752251472:AAFIFSfuH5WNnVmuZ1qA0ZynIbuVnYIuOGQ"
+chat_id = "5338135874"
+
+[finnhub]
+keys = ["d5l1sn1r01qt47mg7pt0d5l1sn1r01qt47mg7ptg", "d5l1tfpr01qt47mg7ub0d5l1tfpr01qt47mg7ubg", "d5l5r4hr01qgqufkf5dgd5l5r4hr01qgqufkf5e0", "d5l5rqhr01qgqufkfhngd5l5rqhr01qgqufkfho0"]
+
+[alpha_vantage]
+# Du kannst hier mehrere Keys als Liste eintragen, da das Skript eine Key-Rotation nutzt
+keys = ["4ebfbdb3c8374c99abbf259c168d93c1", "6898e81a60be40a092710d0349f95110", "a2dd09107d62438c8546c31d36b33458", "03d0c05583534ec8a42a9f470b4f5451"]
+
+[gemini]
+api_key = "AIzaSyCsURDJI2vPO1jomyTAM52KquYObpWSB4M"
