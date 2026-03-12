@@ -1,6 +1,6 @@
 """
-Elite Bull Scanner Pro V8.1 - BALANCED Edition
-Candlestick als Bonus statt Pflicht, adaptive Filter
+Elite Bull Scanner Pro V8.1 - BALANCED Edition (FIXED)
+Candlestick als Bonus statt Pflicht, adaptive Filter, korrigiertes HTML Rendering
 """
 
 import streamlit as st
@@ -327,21 +327,21 @@ class ScanResult:
         description="Kein Signal", entry_quality="weak"
     ))
     has_candlestick_confirm: bool = False
-    structure_intact: bool = False  # NEU: Für Anzeige
+    structure_intact: bool = False
 
 # ============================== KONFIGURATION - GELockERT ==============================
 
 st.set_page_config(layout="wide", page_title="Elite Bull Scanner Pro V8.1 BALANCED", page_icon="🐂")
 
-# 🔥 GELockERTE FILTER - Hier sind die Änderungen!
-MIN_PULLBACK_PERCENT = 0.02      # Von 0.05 auf 0.02 (2% reichen!)
-MAX_PULLBACK_PERCENT = 0.70      # Von 0.50 auf 0.70 (tiefere Pullbacks ok)
+# 🔥 GELockERTE FILTER
+MIN_PULLBACK_PERCENT = 0.02
+MAX_PULLBACK_PERCENT = 0.70
 AUTO_REFRESH_INTERVAL = 3600
 ALERT_COOLDOWN_MINUTES = 60
-MIN_SCORE_THRESHOLD = 55         # Von 70 auf 55 (deutlich niedriger!)
-MIN_CANDLESTICK_STRENGTH = 40    # Von 60 auf 40
-REQUIRE_CANDLESTICK_CONFIRM = False  # WICHTIG: Immer False! Candlestick ist Bonus, nicht Pflicht
-REQUIRE_STRUCTURE_INTACT = False     # NEU: Higher Lows reichen, nicht beides nötig
+MIN_SCORE_THRESHOLD = 55
+MIN_CANDLESTICK_STRENGTH = 40
+REQUIRE_CANDLESTICK_CONFIRM = False
+REQUIRE_STRUCTURE_INTACT = False
 MAX_WATCHLIST_SIZE = 100
 
 # API Keys - AUS SECRETS LADEN!
@@ -390,8 +390,8 @@ def init_session_state():
         'top_movers_cache': FALLBACK_MOVERS,
         'combined_universe': set(DEFAULT_WATCHLIST + [s for sublist in FALLBACK_MOVERS.values() for s in sublist]),
         'movers_source': 'fallback',
-        'hard_filter_active': False,  # 🔥 GEÄNDERT: Default False statt True!
-        'show_only_candlestick': False,  # 🔥 GEÄNDERT: Default False
+        'hard_filter_active': False,
+        'show_only_candlestick': False,
     }
     for k, v in defaults.items():
         if k not in st.session_state:
@@ -775,9 +775,6 @@ def analyze_news_tiered(symbol: str, tier: int, score: int) -> Tuple[List[Dict],
 # ============================== CANDLESTICK ANALYSIS ==============================
 
 def analyze_candlestick(df: pd.DataFrame, swing_low: float, recent_high: float) -> CandlestickSignal:
-    """
-    Candlestick-Analyse - jetzt als Bonus-System, nicht als Pflicht!
-    """
     if len(df) < 5:
         return CandlestickSignal(
             pattern=CandlestickPattern.NONE,
@@ -787,7 +784,6 @@ def analyze_candlestick(df: pd.DataFrame, swing_low: float, recent_high: float) 
             entry_quality="weak"
         )
     
-    # Letzte 3 Kerzen für Muster-Erkennung
     c1 = df.iloc[-3]
     c2 = df.iloc[-2]
     c3 = df.iloc[-1]
@@ -821,13 +817,12 @@ def analyze_candlestick(df: pd.DataFrame, swing_low: float, recent_high: float) 
     dist_to_support = (p3['close'] - swing_low) / p3['close'] if p3['close'] > 0 else 1.0
     near_support = dist_to_support < 0.03
     dist_from_high = (recent_high - p3['close']) / recent_high
-    in_pullback = 0.02 < dist_from_high < 0.70  # 🔥 Angepasst an neue Grenzen
+    in_pullback = 0.02 < dist_from_high < 0.70
     
     signals_found = []
     strength = 0
     confirmations = 0
     
-    # === PATTERN 1: HAMMER ===
     is_hammer = (
         p3['lower_pct'] > 0.60 and
         p3['body_pct'] < 0.30 and
@@ -843,7 +838,6 @@ def analyze_candlestick(df: pd.DataFrame, swing_low: float, recent_high: float) 
             strength += 10
             confirmations += 1
     
-    # === PATTERN 2: INVERTED HAMMER ===
     is_inverted_hammer = (
         p3['upper_pct'] > 0.60 and
         p3['body_pct'] < 0.30 and
@@ -856,7 +850,6 @@ def analyze_candlestick(df: pd.DataFrame, swing_low: float, recent_high: float) 
         signals_found.append("INVERTED_HAMMER")
         strength += 25
     
-    # === PATTERN 3: BULLISH ENGULFING ===
     is_engulfing = (
         p2['bearish'] and
         p3['bullish'] and
@@ -872,7 +865,6 @@ def analyze_candlestick(df: pd.DataFrame, swing_low: float, recent_high: float) 
             strength += 10
             confirmations += 1
     
-    # === PATTERN 4: MORNING STAR ===
     is_morning_star = (
         p1['bearish'] and
         p1['body_pct'] > 0.50 and
@@ -886,7 +878,6 @@ def analyze_candlestick(df: pd.DataFrame, swing_low: float, recent_high: float) 
         strength += 45
         confirmations += 1
     
-    # === PATTERN 5: PIERCING LINE ===
     is_piercing = (
         p2['bearish'] and
         p3['bullish'] and
@@ -899,7 +890,6 @@ def analyze_candlestick(df: pd.DataFrame, swing_low: float, recent_high: float) 
         signals_found.append("PIERCING")
         strength += 30
     
-    # === PATTERN 6: BULLISH HARAMI ===
     is_harami = (
         p2['bearish'] and
         p2['body_pct'] > 0.50 and
@@ -914,7 +904,6 @@ def analyze_candlestick(df: pd.DataFrame, swing_low: float, recent_high: float) 
         signals_found.append("HARAMI")
         strength += 20
     
-    # === PATTERN 7: THREE WHITE SOLDIERS ===
     p0 = candle_properties(df.iloc[-4]) if len(df) >= 4 else None
     
     is_three_soldiers = (
@@ -931,7 +920,6 @@ def analyze_candlestick(df: pd.DataFrame, swing_low: float, recent_high: float) 
         strength += 50
         confirmations += 2
     
-    # === ZUSÄTZLICHE BESTÄTIGUNGEN ===
     avg_vol = df['Volume'].tail(20).mean()
     current_vol = float(df['Volume'].iloc[-1])
     if current_vol > avg_vol * 1.5:
@@ -951,7 +939,6 @@ def analyze_candlestick(df: pd.DataFrame, swing_low: float, recent_high: float) 
         confirmations += 1
         strength += 5
     
-    # === ERGEBNIS ===
     if not signals_found:
         return CandlestickSignal(
             pattern=CandlestickPattern.NONE,
@@ -1193,10 +1180,6 @@ def get_gemini_entry_analysis(item_data: dict) -> str:
 # ============================== ThreadPool Scanner ==============================
 
 class ThreadPoolBullScanner:
-    """
-    ThreadPool-basierter Scanner mit BALANCIERTEN Filtern
-    """
-    
     def __init__(self, max_workers: int = 4, min_delay: float = 1.0):
         self.max_workers = max_workers
         self.min_delay = min_delay
@@ -1288,9 +1271,6 @@ class ThreadPoolBullScanner:
         debug_info['checks']['structure'] = structure.get('structure_intact', False)
         debug_info['checks']['higher_lows'] = structure.get('higher_lows', False)
         
-        # 🔥 GEÄNDERT: Structure-Filter lockerer
-        # ALT: if not structure.get('structure_intact', False) and not structure.get('higher_lows', False):
-        # NEU: Nur prüfen ob überhaupt ein Trend da ist (Higher Lows ODER Higher Highs)
         has_bullish_structure = (
             structure.get('structure_intact', False) or 
             structure.get('higher_lows', False) or
@@ -1308,44 +1288,38 @@ class ThreadPoolBullScanner:
             _log_scan_debug(debug_info)
             return None
         
-        if current_price < last_swing_low * 0.85:  # 🔥 GEÄNDERT: Von 0.90 auf 0.85 (15% statt 10% Puffer)
+        if current_price < last_swing_low * 0.85:
             debug_info['errors'].append("Preis zu weit unter Swing Low")
             _log_scan_debug(debug_info)
             return None
         
-        # === CANDLESTICK ANALYSE ===
         candlestick = analyze_candlestick(df_clean, last_swing_low, recent_high)
         debug_info['checks']['candlestick_pattern'] = candlestick.pattern.value
         debug_info['checks']['candlestick_strength'] = candlestick.strength
         debug_info['checks']['candlestick_quality'] = candlestick.entry_quality
         
-        # 🔥 GEÄNDERT: Candlestick ist BONUS, nicht Pflicht!
         hard_filter_active = st.session_state.get('hard_filter_active', False)
         
         candlestick_penalty = 0
         if hard_filter_active and REQUIRE_CANDLESTICK_CONFIRM:
-            # Nur im echten Hard Mode prüfen (der jetzt default OFF ist)
             if candlestick.strength < MIN_CANDLESTICK_STRENGTH:
                 debug_info['errors'].append(f"Candlestick zu schwach: {candlestick.strength}/100 (min: {MIN_CANDLESTICK_STRENGTH})")
                 _log_scan_debug(debug_info)
                 return None
         
-        # === SCORING (Candlestick als Bonus) ===
-        score = 30  # 🔥 GEÄNDERT: Basis von 25 auf 30 erhöht
+        score = 30
         
-        # Trend-Struktur
         if structure.get('structure_intact', False):
             score += 15
         elif structure.get('higher_lows', False):
-            score += 12  # 🔥 GEÄNDERT: Von 10 auf 12
+            score += 12
         elif structure.get('higher_highs', False):
-            score += 8   # 🔥 NEU: Auch HH allein gibt Punkte
+            score += 8
         
         trend_slope = structure.get('trend_slope', 0)
         if trend_slope is not None and np.isfinite(trend_slope) and trend_slope > 0.005:
             score += 5
         
-        # Volumen
         avg_vol = df_clean['Volume'].mean()
         current_vol = df_clean['Volume'].iloc[-1]
         rvol = current_vol / avg_vol if avg_vol > 0 else 1.0
@@ -1354,31 +1328,26 @@ class ThreadPoolBullScanner:
         elif rvol > 1.0:
             score += 10
         
-        # Support
         support_dist = (current_price - last_swing_low) / current_price if current_price > 0 else 1.0
         if support_dist < 0.03:
             score += 15
         elif support_dist < 0.08:
             score += 8
         
-        # 🔥 Candlestick Bonus (statt Pflicht)
         if candlestick.strength >= MIN_CANDLESTICK_STRENGTH:
-            score += candlestick.strength // 4  # 0-25 Punkte extra (statt //5)
+            score += candlestick.strength // 4
             if candlestick.confirmation:
                 score += 10
         else:
-            # Kleiner Malus für fehlendes Candlestick, aber kein Ausschluss
             candlestick_penalty = 5
             score -= candlestick_penalty
         
-        # News
         news, sources, cached_news = analyze_news_tiered(symbol, tier, score)
         if news:
             score += news[0]['score']
         
-        # Fundamentals
         fundamentals, fund_cached = None, False
-        if score > 50 and tier <= 10:  # 🔥 GEÄNDERT: Von 55 auf 50
+        if score > 50 and tier <= 10:
             fundamentals, fund_cached = get_alpha_vantage_smart(symbol)
         
         pe_ratio = None
@@ -1390,7 +1359,6 @@ class ThreadPoolBullScanner:
                 elif pe_ratio > 100:
                     score -= 5
         
-        # ATR & Risk Management
         try:
             atr = float((df_clean['High'].rolling(14).max() - df_clean['Low'].rolling(14).min()).mean())
             if not np.isfinite(atr) or atr <= 0:
@@ -1406,39 +1374,36 @@ class ThreadPoolBullScanner:
             return None
         
         rr_ratio = (target - current_price) / (current_price - stop_loss) if (current_price - stop_loss) > 0 else 0
-        if rr_ratio < 0.8:  # 🔥 GEÄNDERT: Von 1.0 auf 0.8 (auch kleinere R:R erlauben)
+        if rr_ratio < 0.8:
             debug_info['errors'].append(f"R:R {rr_ratio:.2f} zu niedrig (min: 0.8)")
             _log_scan_debug(debug_info)
             return None
         
-        # Threshold prüfen
         effective_threshold = MIN_SCORE_THRESHOLD
         if score < effective_threshold:
             debug_info['errors'].append(f"Score {score} < {effective_threshold} (Threshold)")
             _log_scan_debug(debug_info)
             return None
         
-        # Reasons
         reasons = [f"📉 -{pullback_pct:.1%}"]
         if structure.get('structure_intact', False):
             reasons.append("📈 Trend stark")
         elif structure.get('higher_lows', False):
-            reasons.append("📈 HL ok")  # 🔥 Kürzer
+            reasons.append("📈 HL ok")
         elif structure.get('higher_highs', False):
-            reasons.append("📈 HH ok")  # 🔥 NEU
+            reasons.append("📈 HH ok")
         
         if rvol > 1.0:
             reasons.append(f"⚡ Vol {rvol:.1f}x")
         if support_dist < 0.03:
             reasons.append("🎯 Support nah")
         
-        # Candlestick in Reasons
         if candlestick.strength >= MIN_CANDLESTICK_STRENGTH:
             reasons.append(f"🕯️ {candlestick.pattern.value}")
             if candlestick.confirmation:
                 reasons.append("✅ Confirm")
         else:
-            reasons.append("⚠️ Kein Candlestick")  # 🔥 Transparent zeigen
+            reasons.append("⚠️ Kein Candlestick")
         
         if news:
             reasons.append(f"📰 {news[0]['source']}")
@@ -1466,7 +1431,7 @@ class ThreadPoolBullScanner:
             'source': source,
             'candlestick': candlestick,
             'has_candlestick_confirm': candlestick.strength >= MIN_CANDLESTICK_STRENGTH,
-            'structure_intact': structure.get('structure_intact', False),  # 🔥 NEU: Für Anzeige
+            'structure_intact': structure.get('structure_intact', False),
         }
     
     def scan_batch(self, symbols: List[Tuple[str, SourceType]], progress_callback=None) -> List[Dict]:
@@ -1596,9 +1561,10 @@ def send_telegram_alert(symbol: str, price: float, pullback_pct: float, news_ite
     except:
         return False
 
-# ============================== Karten HTML ==============================
+# ============================== Karten HTML - KORRIGIERT ==============================
 
 def render_card_html(item: Dict) -> str:
+    """KORRIGIERTE VERSION - Vollständiges HTML"""
     sym = item['symbol']
     price = item['price']
     pullback = item['pullback_pct']
@@ -1617,70 +1583,108 @@ def render_card_html(item: Dict) -> str:
     apis = item.get('api_sources', [])
     cached = item.get('from_cache', False)
     candlestick = item.get('candlestick', None)
-    structure_intact = item.get('structure_intact', False)  # 🔥 NEU
+    structure_intact = item.get('structure_intact', False)
     
     has_candle = candlestick and candlestick.pattern != CandlestickPattern.NONE
     pullback_color = '#ff6b6b' if pullback > 0.15 else '#ffa502'
     conf_color = '#9933ff' if score > 85 else '#FFD700' if score > 70 else '#00FF00'
-    tier_html = f'<div class="tier-badge">T{tier}</div>'
-    api_html = ''.join([f'<div class="tier-badge">{a}</div>' for a in apis])
-    cache_html = '<div class="cache-badge">CACHE</div>' if cached else ''
     
-    # 🔥 Structure Badge
-    structure_html = f'<div class="structure-badge{" weak" if not structure_intact else ""}">{"📈 HH+HL" if structure_intact else "📈 HL"}</div>'
+    # Badges
+    tier_html = f'<span class="tier-badge">T{tier}</span>'
+    api_html = ''.join([f'<span class="tier-badge">{a}</span>' for a in apis])
+    cache_html = '<span class="cache-badge">CACHE</span>' if cached else ''
+    
+    # Structure Badge
+    if structure_intact:
+        structure_html = '<span class="structure-badge">📈 HH+HL</span>'
+    else:
+        structure_html = '<span class="structure-badge weak">📈 HL</span>'
     
     # Candlestick Badge
-    candle_html = ''
     if has_candle:
         candle_color = '#00FF00' if candlestick.strength >= 80 else '#FFD700' if candlestick.strength >= 65 else '#ff6b6b'
-        candle_html = f'<div class="candlestick-badge" style="background: {candle_color};">{candlestick.pattern.value.upper()} {candlestick.strength}</div>'
+        candle_html = f'<span class="candlestick-badge" style="background: {candle_color};">{candlestick.pattern.value.upper()}</span>'
     else:
-        candle_html = f'<div class="candlestick-badge weak">NO CANDLE</div>'
+        candle_html = '<span class="candlestick-badge weak">NO CANDLE</span>'
     
-    source_badges = {
-        SourceType.WATCHLIST: '<div class="tier-badge" style="background:#2d5a2d;">📋 WL</div>',
-        SourceType.GAINERS: '<div class="mover-badge">🚀 GAINER</div>',
-        SourceType.MOST_ACTIVE: '<div class="mover-badge" style="background:linear-gradient(90deg, #FFD700, #FFA500);">🔥 ACTIVE</div>'
-    }
-    source_html = source_badges.get(source, '')
+    # Source Badge
+    if source == SourceType.WATCHLIST:
+        source_html = '<span class="tier-badge" style="background:#2d5a2d;">📋 WL</span>'
+    elif source == SourceType.GAINERS:
+        source_html = '<span class="mover-badge">🚀 GAINER</span>'
+    elif source == SourceType.MOST_ACTIVE:
+        source_html = '<span class="mover-badge" style="background:linear-gradient(90deg, #FFD700, #FFA500);">🔥 ACTIVE</span>'
+    else:
+        source_html = ''
     
+    # Quality Anzeige
     quality_html = ''
     if has_candle:
         quality_colors = {'excellent': '#00FF00', 'good': '#90EE90', 'moderate': '#FFD700', 'weak': '#ff6b6b'}
         q_color = quality_colors.get(candlestick.entry_quality, '#888')
-        quality_html = f'<div style="font-size: 0.7rem; color: {q_color}; margin: 3px 0;">Quality: {candlestick.entry_quality.upper()}</div>'
+        quality_html = f'<div style="font-size: 0.7rem; color: {q_color}; margin: 3px 0;">{candlestick.entry_quality.upper()} ({candlestick.strength}/100)</div>'
     
-    return f"""
-    <div class="bull-card source-{source.value if hasattr(source, 'value') else str(source)}">
-        <div style="display:flex; justify-content:space-between; align-items:center;">
-            <h3 style="margin:0;">🐂 {sym}</h3>
+    # HTML zusammenbauen - KORREKT und VOLLSTÄNDIG
+    html = f'''
+    <div class="bull-card">
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
+            <h3 style="margin:0; color:#fff;">🐂 {sym}</h3>
             {source_html}
         </div>
-        <div class="pullback-badge" style="background: {pullback_color};">-{pullback:.1%}</div>
-        <div style="margin: 5px 0;">{tier_html}{api_html}{cache_html}{structure_html}</div>
-        {candle_html}
-        {quality_html}
-        <div class="price">${price:.2f}</div>
-        <div style="font-size: 0.8rem; color: #aaa; margin: 5px 0;">{reasons}</div>
-        <div style="margin: 8px 0;">
-            <span class="stop-loss">SL: ${sl:.2f}</span>
-            <span class="target">TP: ${target:.2f}</span>
+        
+        <div style="margin-bottom:8px;">
+            <span class="pullback-badge" style="background: {pullback_color};">-{pullback:.1%}</span>
         </div>
-        <div style="font-size: 0.8rem; color: {conf_color}; margin: 5px 0;">Score: {score}/100</div>
-        <div class="confidence-bar"><div class="confidence-fill" style="width: {score}%; background: {conf_color};"></div></div>
-        <div style="font-size: 0.75rem; color: #888; margin: 5px 0;">R:R {rr:.1f}x | Vol {rvol:.1f}x</div>
+        
+        <div style="margin: 5px 0;">
+            {tier_html}{api_html}{cache_html}{structure_html}
+        </div>
+        
+        <div style="margin: 5px 0;">
+            {candle_html}
+        </div>
+        
+        {quality_html}
+        
+        <div class="price">${price:.2f}</div>
+        
+        <div style="font-size: 0.8rem; color: #aaa; margin: 8px 0; line-height:1.4;">
+            {reasons}
+        </div>
+        
+        <div style="margin: 8px 0;">
+            <span class="stop-loss">SL ${sl:.2f}</span>
+            <span class="target">TP ${target:.2f}</span>
+        </div>
+        
+        <div style="font-size: 0.8rem; color: {conf_color}; margin: 5px 0; font-weight:bold;">
+            Score: {score}/100
+        </div>
+        
+        <div class="confidence-bar">
+            <div class="confidence-fill" style="width: {score}%; background: {conf_color};"></div>
+        </div>
+        
+        <div style="font-size: 0.75rem; color: #888; margin: 5px 0;">
+            R:R {rr:.1f}x | Vol {rvol:.1f}x
+        </div>
+        
         <a href="{news_url}" target="_blank" class="news-link-btn">📰 {news_title}</a>
         <a href="{tv_url}" target="_blank" class="btn-link">📈 TradingView</a>
     </div>
-    """
+    '''
+    
+    return html
 
 def render_card(item: Dict, container):
-    html = render_card_html(item)
+    """KORRIGIERTE render_card Funktion"""
     with container:
+        html = render_card_html(item)
         st.markdown(html, unsafe_allow_html=True)
         
-        unique_btn_key = f"gemini_btn_{item['symbol']}_{int(time.time()*1000)}"  # 🔥 Eindeutiger Key
-        if st.button(f"🤖 Gemini Check", key=unique_btn_key):
+        # Eindeutiger Key für den Button
+        unique_key = f"gemini_{item['symbol']}_{int(time.time() * 1000)}"
+        if st.button(f"🤖 Gemini Check", key=unique_key):
             with st.spinner(f"Gemini analysiert {item['symbol']}..."):
                 analysis = get_gemini_entry_analysis(item)
                 st.info(analysis, icon="💡")
@@ -1691,7 +1695,7 @@ def main():
     clock = get_market_clock()
 
     if clock.get('is_holiday'):
-        st.markdown(f"""
+        st.markdown("""
         <div class="holiday-banner">
             🎌 US MARKET HOLIDAY 🎌<br>
             <small>Markt ist geschlossen. Daten können unvollständig sein.</small>
@@ -1709,7 +1713,6 @@ def main():
     </div>
     """, unsafe_allow_html=True)
 
-    # Automatisches Refresh
     if st.session_state.get('auto_refresh'):
         last = st.session_state.get('last_auto_refresh', 0)
         last_movers = st.session_state.get('last_movers_check', 0)
@@ -1733,7 +1736,6 @@ def main():
             st.session_state['refresh_count'] = st.session_state.get('refresh_count', 0) + 1
             st.rerun()
 
-    # Sidebar
     with st.sidebar:
         st.header("🤖 Autopilot (24/7)")
         auto_pilot = st.toggle("Autopilot aktivieren", value=st.session_state.get('auto_refresh', False), help="Scannt automatisch alle 30 Minuten")
@@ -1742,7 +1744,6 @@ def main():
 
         st.header("🎛️ Filter Einstellungen")
         
-        # 🔥 Hard Filter Toggle - jetzt default OFF
         hard_filter = st.toggle("🔥 Hard Mode (Nur Candlestick)", 
                                 value=st.session_state.get('hard_filter_active', False),
                                 help="Nur Setups mit starken Candlestick-Signalen (60+ Punkte)")
@@ -1759,7 +1760,6 @@ def main():
         else:
             st.info("✅ Balanced Mode: Candlestick als Bonus, nicht Pflicht")
         
-        # 🔥 NEU: Manuelle Filter-Anpassung
         with st.expander("⚙️ Filter feinjustieren"):
             global MIN_PULLBACK_PERCENT, MAX_PULLBACK_PERCENT, MIN_SCORE_THRESHOLD
             min_pull = st.slider("Min. Pullback %", 1, 10, int(MIN_PULLBACK_PERCENT*100)) / 100
@@ -1888,11 +1888,9 @@ def main():
         st.header("🔍 Manuelle Abfrage")
         manual_symbol = st.text_input("Symbol:", placeholder="z.B. NVDA", key="manual").upper()
         
-        # 🔥 Debug-Option für manuelle Abfrage
         show_debug = st.checkbox("Debug-Info anzeigen", value=True)
         
         if st.button("📊 Analyse starten") and manual_symbol:
-            # 🔥 Temporär Hard Filter deaktivieren für manuellen Test
             old_hard_filter = st.session_state.get('hard_filter_active', False)
             st.session_state['hard_filter_active'] = False
             
@@ -1904,7 +1902,6 @@ def main():
                     if result:
                         st.success(f"✅ Setup gefunden für {manual_symbol}!")
                         
-                        # Alle Details anzeigen
                         col1, col2 = st.columns(2)
                         with col1:
                             st.write(f"**Score:** {result['score']}/100")
@@ -1923,7 +1920,6 @@ def main():
                         
                         st.write(f"**Reasons:** {' | '.join(result['reasons'])}")
                         
-                        # 🔥 Wichtig: Zeige ob Hard Filter blockiert hätte
                         if old_hard_filter and candle and candle.strength < MIN_CANDLESTICK_STRENGTH:
                             st.warning(f"⚠️ Im Hard Mode wäre dieses Setup ausgeschlossen (Candlestick {candle.strength}/100)")
                     else:
@@ -1940,7 +1936,6 @@ def main():
                                     for err in last.get('errors', []):
                                         st.write(f"- {err}")
                                         
-                                    # 🔥 Hilfreiche Tipps basierend auf Fehlern
                                     errors = last.get('errors', [])
                                     if any('Pullback' in e for e in errors):
                                         st.info("💡 Tipp: Pullback außerhalb 2%-70% Bereich. Prüfe ob Aktueller Preis nahe am Hoch ist.")
@@ -1949,7 +1944,6 @@ def main():
                                     if any('Score' in e for e in errors):
                                         st.info("💡 Tipp: Score zu niedrig. In den Einstellungen den Min-Score Slider reduzieren.")
                 finally:
-                    # 🔥 Wiederherstellen
                     st.session_state['hard_filter_active'] = old_hard_filter
         
         if st.button("🔄 Stats zurücksetzen"):
@@ -1966,7 +1960,6 @@ def main():
             st.success("Zurückgesetzt!")
             st.rerun()
 
-    # Haupt-Scan Button
     scan_triggered = False
     col1, col2 = st.columns([3, 1])
     with col1:
@@ -1978,7 +1971,6 @@ def main():
             st.session_state['hard_filter_active'] = False
             scan_triggered = True
 
-    # --- AUTOPILOT LOGIK ---
     if st.session_state.get('auto_refresh', False):
         last_scan = st.session_state.get('last_scan_time')
         if last_scan is None:
@@ -2002,7 +1994,6 @@ def main():
             filter_mode = "🔥 HARD (Nur Candlestick)" if st.session_state.get('hard_filter_active', False) else "✅ BALANCED (Candlestick als Bonus)"
             st.info(f"📊 Modus: **{filter_mode}** | Scanne {len(universe)} Symbole ({watchlist_count} Watchlist + {movers_count} Movers)")
             
-            # 🔥 Zeige aktuelle Filter-Einstellungen
             with st.expander("Aktive Filter"):
                 st.write(f"- Pullback: {MIN_PULLBACK_PERCENT:.0%} - {MAX_PULLBACK_PERCENT:.0%}")
                 st.write(f"- Min Score: {MIN_SCORE_THRESHOLD}")
@@ -2047,7 +2038,6 @@ def main():
                 if filtered_by_candlestick[0] > 0:
                     st.info(f"💡 {filtered_by_candlestick[0]} hätten durch Hard Filter ausgeschlossen werden")
             
-            # Alerts
             alerts_sent = 0
             for item in results:
                 if item['score'] > 75:
@@ -2070,7 +2060,6 @@ def main():
                             if alerts_sent <= 3:
                                 st.toast(f"🚨 {setup_type} Alert: {symbol} @ ${price:.2f} (Score: {score})")
 
-    # Ergebnisse anzeigen
     results = st.session_state.get('scan_results', [])
     if results:
         hard_filter_active = st.session_state.get('hard_filter_active', False)
@@ -2116,7 +2105,6 @@ def main():
         cols[2].metric("Finnhub", stats.get('finnhub', 0))
         cols[3].metric("Alpha Vantage", stats.get('alpha_vantage', 0))
         
-        # Candlestick-Statistik
         if results:
             quality_dist = {'excellent': 0, 'good': 0, 'moderate': 0, 'weak': 0}
             pattern_dist = {}
@@ -2137,8 +2125,9 @@ def main():
         
         st.success(f"✅ APIs in Ergebnissen: {api_summary} | Cache: {cache_count}")
         
-        # Ergebnis-Grid
         results_sorted = sorted(results, key=lambda x: (x['score'], x['pullback_pct']), reverse=True)
+        
+        # KORRIGIERTE Grid-Anzeige
         cols = st.columns(4)
         for i, r in enumerate(results_sorted[:16]):
             with cols[i % 4]:
@@ -2176,7 +2165,6 @@ def main():
     else:
         st.info("👆 Klicke '🚀 BALANCED SCAN' um Setups zu finden! (Candlestick ist jetzt Bonus, nicht Pflicht)")
 
-    # --- AUTOPILOT KEEP-ALIVE LOOP ---
     if st.session_state.get('auto_refresh', False):
         last_scan = st.session_state.get('last_scan_time')
         if last_scan:
