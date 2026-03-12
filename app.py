@@ -1,6 +1,5 @@
 """
-Elite Bull Scanner Pro V8.1 - BALANCED Edition (FIXED)
-Candlestick als Bonus statt Pflicht, adaptive Filter, korrigiertes HTML Rendering
+Elite Bull Scanner Pro V8.1 - BALANCED Edition (FIXED RENDERING)
 """
 
 import streamlit as st
@@ -32,239 +31,41 @@ logger = logging.getLogger(__name__)
 # ============================== CSS Styles ==============================
 st.markdown("""
 <style>
-.bull-card { 
-    border: 1px solid #333; 
-    border-radius: 10px; 
-    padding: 15px; 
-    margin: 10px 0; 
-    background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
-    box-shadow: 0 4px 6px rgba(0,0,0,0.3);
-    transition: transform 0.2s;
-    border-left: 4px solid #00FF00;
-}
-.bull-card:hover {
-    transform: translateY(-2px);
-    box-shadow: 0 6px 12px rgba(0,0,0,0.4);
-}
-.pullback-badge { 
-    padding: 5px 10px; 
-    border-radius: 5px; 
-    color: white; 
-    font-weight: bold;
-    display: inline-block;
-    margin: 5px 0;
-}
-.candlestick-badge {
-    background: linear-gradient(90deg, #00FF00, #00aa00);
-    color: white;
-    padding: 3px 8px;
-    border-radius: 3px;
-    font-size: 0.75rem;
-    margin: 0 2px;
-    font-weight: bold;
-    display: inline-block;
-}
-.candlestick-badge.weak {
-    background: linear-gradient(90deg, #ff6b6b, #ffa502);
-    opacity: 0.7;
-}
-.tier-badge { 
-    background: #444; 
-    padding: 2px 8px; 
-    border-radius: 3px; 
-    font-size: 0.7rem; 
-    margin: 0 2px;
-    color: #fff;
-    border: 1px solid #555;
-}
-.cache-badge {
-    background: #2d5a2d;
-    padding: 2px 8px;
-    border-radius: 3px;
-    font-size: 0.7rem;
-    margin: 0 2px;
-    color: #90EE90;
-}
-.price {
-    font-size: 1.5rem;
-    font-weight: bold;
-    color: #00FF00;
-    margin: 10px 0;
-}
-.stop-loss {
-    background: #ff4b4b;
-    color: white;
-    padding: 3px 8px;
-    border-radius: 3px;
-    font-size: 0.8rem;
-    margin-right: 5px;
-}
-.target {
-    background: #00FF00;
-    color: black;
-    padding: 3px 8px;
-    border-radius: 3px;
-    font-size: 0.8rem;
-}
-.confidence-bar {
-    width: 100%;
-    height: 8px;
-    background: #333;
-    border-radius: 4px;
-    overflow: hidden;
-    margin: 5px 0;
-}
-.confidence-fill {
-    height: 100%;
-    transition: width 0.3s ease;
-}
-.news-link-btn {
-    display: block;
-    background: #1f4068;
-    color: #fff;
-    text-decoration: none;
-    padding: 8px;
-    border-radius: 5px;
-    margin: 5px 0;
-    font-size: 0.8rem;
-    text-align: center;
-}
-.news-link-btn:hover {
-    background: #2a5585;
-}
-.btn-link {
-    display: block;
-    background: #4a4a4a;
-    color: #fff;
-    text-decoration: none;
-    padding: 8px;
-    border-radius: 5px;
-    margin: 5px 0;
-    font-size: 0.8rem;
-    text-align: center;
-}
-.btn-link:hover {
-    background: #5a5a5a;
-}
-.market-clock-container {
-    background: linear-gradient(135deg, #1a1a2e 0%, #0f0f23 100%);
-    padding: 20px;
-    border-radius: 15px;
-    text-align: center;
-    margin: 20px 0;
-    border: 1px solid #333;
-}
-.market-time {
-    font-size: 2.5rem;
-    font-weight: bold;
-    color: #00FF00;
-    font-family: 'Courier New', monospace;
-}
-.market-status {
-    padding: 8px 20px;
-    border-radius: 20px;
-    font-weight: bold;
-    color: white;
-    display: inline-block;
-    margin: 10px 0;
-}
-.market-countdown {
-    font-size: 1.2rem;
-    color: #FFD700;
-    margin: 10px 0;
-}
-.market-progress {
-    width: 100%;
-    height: 6px;
-    background: #333;
-    border-radius: 3px;
-    overflow: hidden;
-    margin-top: 10px;
-}
-.market-progress-bar {
-    height: 100%;
-    background: linear-gradient(90deg, #00FF00, #FFD700);
-    transition: width 1s ease;
-}
-.holiday-banner {
-    background: linear-gradient(90deg, #ff4b4b, #ff6b6b);
-    color: white;
-    padding: 20px;
-    border-radius: 10px;
-    text-align: center;
-    font-size: 1.2rem;
-    margin: 20px 0;
-    border: 2px solid #ff3333;
-}
-.info-box {
-    background: #1a1a2e;
-    padding: 15px;
-    border-radius: 8px;
-    border-left: 4px solid #00FF00;
-    margin: 10px 0;
-}
-.error-box {
-    background: #2d1a1a;
-    padding: 15px;
-    border-radius: 8px;
-    border-left: 4px solid #ff4b4b;
-    margin: 10px 0;
-    color: #ff9999;
-}
-.api-stat {
-    background: #1a1a2e;
-    padding: 10px;
-    border-radius: 5px;
-    margin: 5px 0;
-    font-size: 0.9rem;
-}
-.key-indicator {
-    padding: 8px;
-    margin: 5px 0;
-    border-radius: 5px;
-    background: #2a2a3e;
-    font-size: 0.85rem;
-}
-.key-active {
-    border-left: 3px solid #00FF00;
-    background: #1a2a1a;
-}
-.key-exhausted {
-    border-left: 3px solid #ff4b4b;
-    opacity: 0.6;
-}
-.mover-badge {
-    background: linear-gradient(90deg, #ff6b6b, #ffa502);
-    color: white;
-    padding: 3px 8px;
-    border-radius: 3px;
-    font-size: 0.7rem;
-    margin: 0 2px;
-    font-weight: bold;
-}
-.source-watchlist { border-left: 3px solid #00FF00; }
-.source-gainers { border-left: 3px solid #ff6b6b; }
-.source-mostactive { border-left: 3px solid #FFD700; }
-.filter-active {
-    background: linear-gradient(90deg, #00FF00, #00aa00);
-    color: black;
-    padding: 10px;
-    border-radius: 5px;
-    font-weight: bold;
-    margin: 10px 0;
-}
-.structure-badge {
-    background: #2d5a2d;
-    padding: 2px 8px;
-    border-radius: 3px;
-    font-size: 0.7rem;
-    margin: 0 2px;
-    color: #90EE90;
-}
-.structure-badge.weak {
-    background: #5a2d2d;
-    color: #ff9999;
-}
+    .bull-card { 
+        border: 1px solid #333; 
+        border-radius: 10px; 
+        padding: 15px; 
+        margin: 10px 0; 
+        background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+        box-shadow: 0 4px 6px rgba(0,0,0,0.3);
+        transition: transform 0.2s;
+        border-left: 4px solid #00FF00;
+    }
+    .bull-card:hover { transform: translateY(-2px); box-shadow: 0 6px 12px rgba(0,0,0,0.4); }
+    .pullback-badge { padding: 5px 10px; border-radius: 5px; color: white; font-weight: bold; display: inline-block; margin: 5px 0; }
+    .candlestick-badge { background: linear-gradient(90deg, #00FF00, #00aa00); color: white; padding: 3px 8px; border-radius: 3px; font-size: 0.75rem; margin: 0 2px; font-weight: bold; display: inline-block; }
+    .candlestick-badge.weak { background: linear-gradient(90deg, #ff6b6b, #ffa502); opacity: 0.7; }
+    .tier-badge { background: #444; padding: 2px 8px; border-radius: 3px; font-size: 0.7rem; margin: 0 2px; color: #fff; border: 1px solid #555; display: inline-block; }
+    .cache-badge { background: #2d5a2d; padding: 2px 8px; border-radius: 3px; font-size: 0.7rem; margin: 0 2px; color: #90EE90; display: inline-block; }
+    .structure-badge { background: #2d5a2d; padding: 2px 8px; border-radius: 3px; font-size: 0.7rem; margin: 0 2px; color: #90EE90; display: inline-block; }
+    .structure-badge.weak { background: #5a2d2d; color: #ff9999; }
+    .price { font-size: 1.5rem; font-weight: bold; color: #00FF00; margin: 10px 0; }
+    .stop-loss { background: #ff4b4b; color: white; padding: 3px 8px; border-radius: 3px; font-size: 0.8rem; margin-right: 5px; display: inline-block; }
+    .target { background: #00FF00; color: black; padding: 3px 8px; border-radius: 3px; font-size: 0.8rem; display: inline-block; }
+    .confidence-bar { width: 100%; height: 8px; background: #333; border-radius: 4px; overflow: hidden; margin: 5px 0; }
+    .confidence-fill { height: 100%; transition: width 0.3s ease; }
+    .news-link-btn { display: block; background: #1f4068; color: #fff; text-decoration: none; padding: 8px; border-radius: 5px; margin: 5px 0; font-size: 0.8rem; text-align: center; }
+    .news-link-btn:hover { background: #2a5585; }
+    .btn-link { display: block; background: #4a4a4a; color: #fff; text-decoration: none; padding: 8px; border-radius: 5px; margin: 5px 0; font-size: 0.8rem; text-align: center; }
+    .btn-link:hover { background: #5a5a5a; }
+    .mover-badge { background: linear-gradient(90deg, #ff6b6b, #ffa502); color: white; padding: 3px 8px; border-radius: 3px; font-size: 0.7rem; margin: 0 2px; font-weight: bold; display: inline-block; }
+    .info-box { background: #1a1a2e; padding: 15px; border-radius: 8px; border-left: 4px solid #00FF00; margin: 10px 0; }
+    .error-box { background: #2d1a1a; padding: 15px; border-radius: 8px; border-left: 4px solid #ff4b4b; margin: 10px 0; color: #ff9999; }
+    .api-stat { background: #1a1a2e; padding: 10px; border-radius: 5px; margin: 5px 0; font-size: 0.9rem; }
+    .key-indicator { padding: 8px; margin: 5px 0; border-radius: 5px; background: #2a2a3e; font-size: 0.85rem; }
+    .key-active { border-left: 3px solid #00FF00; background: #1a2a1a; }
+    .key-exhausted { border-left: 3px solid #ff4b4b; opacity: 0.6; }
+    .filter-active { background: linear-gradient(90deg, #00FF00, #00aa00); color: black; padding: 10px; border-radius: 5px; font-weight: bold; margin: 10px 0; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -289,20 +90,10 @@ class CandlestickPattern(str, Enum):
 @dataclass
 class CandlestickSignal:
     pattern: CandlestickPattern
-    strength: int  # 0-100
+    strength: int
     confirmation: bool
     description: str
-    entry_quality: str  # "excellent", "good", "moderate", "weak"
-
-@dataclass
-class RateLimitConfig:
-    calls_per_second: float = 1.0
-    calls_per_minute: int = 60
-    calls_per_day: int = 25
-    burst_size: int = 3
-    
-    def get_min_delay(self) -> float:
-        return 1.0 / self.calls_per_second
+    entry_quality: str
 
 @dataclass 
 class ScanResult:
@@ -329,11 +120,10 @@ class ScanResult:
     has_candlestick_confirm: bool = False
     structure_intact: bool = False
 
-# ============================== KONFIGURATION - GELockERT ==============================
+# ============================== KONFIGURATION ==============================
 
-st.set_page_config(layout="wide", page_title="Elite Bull Scanner Pro V8.1 BALANCED", page_icon="🐂")
+st.set_page_config(layout="wide", page_title="Elite Bull Scanner Pro V8.1", page_icon="🐂")
 
-# 🔥 GELockERTE FILTER
 MIN_PULLBACK_PERCENT = 0.02
 MAX_PULLBACK_PERCENT = 0.70
 AUTO_REFRESH_INTERVAL = 3600
@@ -341,17 +131,13 @@ ALERT_COOLDOWN_MINUTES = 60
 MIN_SCORE_THRESHOLD = 55
 MIN_CANDLESTICK_STRENGTH = 40
 REQUIRE_CANDLESTICK_CONFIRM = False
-REQUIRE_STRUCTURE_INTACT = False
-MAX_WATCHLIST_SIZE = 100
 
-# API Keys - AUS SECRETS LADEN!
 try:
     TELEGRAM_BOT_TOKEN = st.secrets["telegram"]["bot_token"]
     TELEGRAM_CHAT_ID = st.secrets["telegram"]["chat_id"]
     FINNHUB_KEYS = st.secrets["finnhub"]["keys"]
     ALPHA_VANTAGE_KEYS = st.secrets["alpha_vantage"]["keys"]
 except Exception as e:
-    logger.warning(f"Secrets nicht gefunden oder unvollständig: {e}")
     TELEGRAM_BOT_TOKEN = ""
     TELEGRAM_CHAT_ID = ""
     FINNHUB_KEYS = []
@@ -391,7 +177,6 @@ def init_session_state():
         'combined_universe': set(DEFAULT_WATCHLIST + [s for sublist in FALLBACK_MOVERS.values() for s in sublist]),
         'movers_source': 'fallback',
         'hard_filter_active': False,
-        'show_only_candlestick': False,
     }
     for k, v in defaults.items():
         if k not in st.session_state:
@@ -1561,131 +1346,86 @@ def send_telegram_alert(symbol: str, price: float, pullback_pct: float, news_ite
     except:
         return False
 
-# ============================== Karten HTML - KORRIGIERT ==============================
-
-def render_card_html(item: Dict) -> str:
-    """KORRIGIERTE VERSION - Vollständiges HTML"""
-    sym = item['symbol']
-    price = item['price']
-    pullback = item['pullback_pct']
-    sl = item['stop_loss']
-    target = item['target']
-    rr = item['rr_ratio']
-    rvol = item['rvol']
-    score = item['score']
-    reasons = ' | '.join(item['reasons'][:4])
-    news_item = item.get('news', [{}])[0] if item.get('news') else None
-    news_title = news_item['title'][:40] + '...' if news_item else 'Keine News'
-    news_url = news_item['url'] if news_item else f'https://finance.yahoo.com/quote/{sym}'
-    tv_url = f'https://www.tradingview.com/chart/?symbol={sym}'
-    tier = item.get('tier', '-')
-    source = item.get('source', SourceType.UNKNOWN)
-    apis = item.get('api_sources', [])
-    cached = item.get('from_cache', False)
-    candlestick = item.get('candlestick', None)
-    structure_intact = item.get('structure_intact', False)
-    
-    has_candle = candlestick and candlestick.pattern != CandlestickPattern.NONE
-    pullback_color = '#ff6b6b' if pullback > 0.15 else '#ffa502'
-    conf_color = '#9933ff' if score > 85 else '#FFD700' if score > 70 else '#00FF00'
-    
-    # Badges
-    tier_html = f'<span class="tier-badge">T{tier}</span>'
-    api_html = ''.join([f'<span class="tier-badge">{a}</span>' for a in apis])
-    cache_html = '<span class="cache-badge">CACHE</span>' if cached else ''
-    
-    # Structure Badge
-    if structure_intact:
-        structure_html = '<span class="structure-badge">📈 HH+HL</span>'
-    else:
-        structure_html = '<span class="structure-badge weak">📈 HL</span>'
-    
-    # Candlestick Badge
-    if has_candle:
-        candle_color = '#00FF00' if candlestick.strength >= 80 else '#FFD700' if candlestick.strength >= 65 else '#ff6b6b'
-        candle_html = f'<span class="candlestick-badge" style="background: {candle_color};">{candlestick.pattern.value.upper()}</span>'
-    else:
-        candle_html = '<span class="candlestick-badge weak">NO CANDLE</span>'
-    
-    # Source Badge
-    if source == SourceType.WATCHLIST:
-        source_html = '<span class="tier-badge" style="background:#2d5a2d;">📋 WL</span>'
-    elif source == SourceType.GAINERS:
-        source_html = '<span class="mover-badge">🚀 GAINER</span>'
-    elif source == SourceType.MOST_ACTIVE:
-        source_html = '<span class="mover-badge" style="background:linear-gradient(90deg, #FFD700, #FFA500);">🔥 ACTIVE</span>'
-    else:
-        source_html = ''
-    
-    # Quality Anzeige
-    quality_html = ''
-    if has_candle:
-        quality_colors = {'excellent': '#00FF00', 'good': '#90EE90', 'moderate': '#FFD700', 'weak': '#ff6b6b'}
-        q_color = quality_colors.get(candlestick.entry_quality, '#888')
-        quality_html = f'<div style="font-size: 0.7rem; color: {q_color}; margin: 3px 0;">{candlestick.entry_quality.upper()} ({candlestick.strength}/100)</div>'
-    
-    # HTML zusammenbauen - KORREKT und VOLLSTÄNDIG
-    html = f'''
-    <div class="bull-card">
-        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
-            <h3 style="margin:0; color:#fff;">🐂 {sym}</h3>
-            {source_html}
-        </div>
-        
-        <div style="margin-bottom:8px;">
-            <span class="pullback-badge" style="background: {pullback_color};">-{pullback:.1%}</span>
-        </div>
-        
-        <div style="margin: 5px 0;">
-            {tier_html}{api_html}{cache_html}{structure_html}
-        </div>
-        
-        <div style="margin: 5px 0;">
-            {candle_html}
-        </div>
-        
-        {quality_html}
-        
-        <div class="price">${price:.2f}</div>
-        
-        <div style="font-size: 0.8rem; color: #aaa; margin: 8px 0; line-height:1.4;">
-            {reasons}
-        </div>
-        
-        <div style="margin: 8px 0;">
-            <span class="stop-loss">SL ${sl:.2f}</span>
-            <span class="target">TP ${target:.2f}</span>
-        </div>
-        
-        <div style="font-size: 0.8rem; color: {conf_color}; margin: 5px 0; font-weight:bold;">
-            Score: {score}/100
-        </div>
-        
-        <div class="confidence-bar">
-            <div class="confidence-fill" style="width: {score}%; background: {conf_color};"></div>
-        </div>
-        
-        <div style="font-size: 0.75rem; color: #888; margin: 5px 0;">
-            R:R {rr:.1f}x | Vol {rvol:.1f}x
-        </div>
-        
-        <a href="{news_url}" target="_blank" class="news-link-btn">📰 {news_title}</a>
-        <a href="{tv_url}" target="_blank" class="btn-link">📈 TradingView</a>
-    </div>
-    '''
-    
-    return html
+# ============================== KARTEN RENDERING - KORRIGIERT ==============================
 
 def render_card(item: Dict, container):
-    """KORRIGIERTE render_card Funktion"""
+    """
+    KORRIGIERTE Version: Verwendet st.components.v1.html für zuverlässiges Rendering
+    """
     with container:
-        html = render_card_html(item)
-        st.markdown(html, unsafe_allow_html=True)
+        sym = item['symbol']
+        price = item['price']
+        pullback = item['pullback_pct']
+        sl = item['stop_loss']
+        target = item['target']
+        rr = item['rr_ratio']
+        rvol = item['rvol']
+        score = item['score']
+        reasons = ' | '.join(item['reasons'][:4])
+        news_item = item.get('news', [{}])[0] if item.get('news') else None
+        news_title = news_item['title'][:35] + '...' if news_item else 'Keine News'
+        news_url = news_item['url'] if news_item else f'https://finance.yahoo.com/quote/{sym}'
+        tv_url = f'https://www.tradingview.com/chart/?symbol={sym}'
+        tier = item.get('tier', '-')
+        source = item.get('source', SourceType.UNKNOWN)
+        apis = item.get('api_sources', [])
+        cached = item.get('from_cache', False)
+        candlestick = item.get('candlestick', None)
+        structure_intact = item.get('structure_intact', False)
         
-        # Eindeutiger Key für den Button
-        unique_key = f"gemini_{item['symbol']}_{int(time.time() * 1000)}"
+        has_candle = candlestick and candlestick.pattern != CandlestickPattern.NONE
+        pullback_color = '#ff6b6b' if pullback > 0.15 else '#ffa502'
+        conf_color = '#9933ff' if score > 85 else '#FFD700' if score > 70 else '#00FF00'
+        
+        # Source Badge
+        if source == SourceType.WATCHLIST:
+            source_badge = '📋 WL'
+            source_class = 'tier-badge'
+        elif source == SourceType.GAINERS:
+            source_badge = '🚀 GAINER'
+            source_class = 'mover-badge'
+        elif source == SourceType.MOST_ACTIVE:
+            source_badge = '🔥 ACTIVE'
+            source_class = 'mover-badge'
+        else:
+            source_badge = '📊'
+            source_class = 'tier-badge'
+        
+        # Candlestick Badge
+        if has_candle:
+            candle_text = f"{candlestick.pattern.value.upper()} {candlestick.strength}"
+            candle_class = 'candlestick-badge'
+            if candlestick.strength < 65:
+                candle_style = 'background: linear-gradient(90deg, #FFD700, #FFA500);'
+            else:
+                candle_style = 'background: linear-gradient(90deg, #00FF00, #00aa00);'
+        else:
+            candle_text = 'NO CANDLE'
+            candle_class = 'candlestick-badge weak'
+            candle_style = ''
+        
+        # Structure Badge
+        if structure_intact:
+            struct_text = '📈 HH+HL'
+            struct_class = 'structure-badge'
+        else:
+            struct_text = '📈 HL'
+            struct_class = 'structure-badge weak'
+        
+        # API Badges
+        api_badges = ''.join([f'<span class="tier-badge">{a}</span>' for a in apis])
+        cache_badge = '<span class="cache-badge">CACHE</span>' if cached else ''
+        
+        # HTML für die Karte - EINZEILIG um Parsing-Fehler zu vermeiden
+        card_html = f'<div class="bull-card"><div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;"><h3 style="margin:0; color:#fff;">🐂 {sym}</h3><span class="{source_class}">{source_badge}</span></div><div style="margin-bottom:8px;"><span class="pullback-badge" style="background: {pullback_color};">-{pullback:.1%}</span></div><div style="margin: 5px 0;"><span class="tier-badge">T{tier}</span>{api_badges}{cache_badge}<span class="{struct_class}">{struct_text}</span></div><div style="margin: 5px 0;"><span class="{candle_class}" style="{candle_style}">{candle_text}</span></div><div class="price">${price:.2f}</div><div style="font-size: 0.8rem; color: #aaa; margin: 8px 0; line-height:1.4;">{reasons}</div><div style="margin: 8px 0;"><span class="stop-loss">SL ${sl:.2f}</span><span class="target">TP ${target:.2f}</span></div><div style="font-size: 0.8rem; color: {conf_color}; margin: 5px 0; font-weight:bold;">Score: {score}/100</div><div class="confidence-bar"><div class="confidence-fill" style="width: {score}%; background: {conf_color};"></div></div><div style="font-size: 0.75rem; color: #888; margin: 5px 0;">R:R {rr:.1f}x | Vol {rvol:.1f}x</div><a href="{news_url}" target="_blank" class="news-link-btn">📰 {news_title}</a><a href="{tv_url}" target="_blank" class="btn-link">📈 TradingView</a></div>'
+        
+        # WICHTIG: Verwende st.markdown mit unsafe_allow_html=True
+        st.markdown(card_html, unsafe_allow_html=True)
+        
+        # Button separat
+        unique_key = f"gemini_{sym}_{int(time.time() * 1000)}_{random.randint(1000,9999)}"
         if st.button(f"🤖 Gemini Check", key=unique_key):
-            with st.spinner(f"Gemini analysiert {item['symbol']}..."):
+            with st.spinner(f"Gemini analysiert {sym}..."):
                 analysis = get_gemini_entry_analysis(item)
                 st.info(analysis, icon="💡")
 
@@ -1696,20 +1436,20 @@ def main():
 
     if clock.get('is_holiday'):
         st.markdown("""
-        <div class="holiday-banner">
+        <div style="background: linear-gradient(90deg, #ff4b4b, #ff6b6b); color: white; padding: 20px; border-radius: 10px; text-align: center; font-size: 1.2rem; margin: 20px 0; border: 2px solid #ff3333;">
             🎌 US MARKET HOLIDAY 🎌<br>
             <small>Markt ist geschlossen. Daten können unvollständig sein.</small>
         </div>
         """, unsafe_allow_html=True)
 
     st.markdown(f"""
-    <div class="market-clock-container">
-        <div class="market-time">{clock['time']}</div>
+    <div style="background: linear-gradient(135deg, #1a1a2e 0%, #0f0f23 100%); padding: 20px; border-radius: 15px; text-align: center; margin: 20px 0; border: 1px solid #333;">
+        <div style="font-size: 2.5rem; font-weight: bold; color: #00FF00; font-family: 'Courier New', monospace;">{clock['time']}</div>
         <div style="margin: 10px 0;">
-            <span class="market-status" style="background: {clock['color']};">{clock['status']}</span>
+            <span style="padding: 8px 20px; border-radius: 20px; font-weight: bold; color: white; display: inline-block; background: {clock['color']};">{clock['status']}</span>
         </div>
-        <div class="market-countdown">{clock['countdown']}</div>
-        {f'<div class="market-progress"><div class="market-progress-bar" style="width: {clock["progress"]*100}%;"></div></div>' if clock['is_open'] else ''}
+        <div style="font-size: 1.2rem; color: #FFD700; margin: 10px 0;">{clock['countdown']}</div>
+        {f'<div style="width: 100%; height: 6px; background: #333; border-radius: 3px; overflow: hidden; margin-top: 10px;"><div style="height: 100%; background: linear-gradient(90deg, #00FF00, #FFD700); transition: width 1s ease; width: {clock["progress"]*100}%;"></div></div>' if clock['is_open'] else ''}
     </div>
     """, unsafe_allow_html=True)
 
@@ -1751,7 +1491,7 @@ def main():
         
         if hard_filter:
             st.markdown("""
-            <div class="filter-active">
+            <div style="background: linear-gradient(90deg, #00FF00, #00aa00); color: black; padding: 10px; border-radius: 5px; font-weight: bold; margin: 10px 0;">
                 🔥 HARD MODE AKTIV<br>
                 <small>Min. Candlestick: 40/100<br>
                 Nur excellent/good Quality</small>
@@ -1779,7 +1519,7 @@ def main():
         
         yahoo_calls = stats.get('yahoo', 0)
         st.markdown(f"""
-        <div class="info-box">
+        <div style="background: #1a1a2e; padding: 15px; border-radius: 8px; border-left: 4px solid #00FF00; margin: 10px 0;">
         🟢 <b>Yahoo Finance</b><br>
         Kursdaten: {yahoo_calls} Calls<br>
         <small>Unbegrenzt kostenlos</small>
@@ -1800,7 +1540,7 @@ def main():
         all_alpha_exhausted = all(s['exhausted'] for s in alpha_status_list)
         if all_alpha_exhausted:
             st.markdown("""
-            <div class="error-box">
+            <div style="background: #2d1a1a; padding: 15px; border-radius: 8px; border-left: 4px solid #ff4b4b; margin: 10px 0; color: #ff9999;">
             ⚠️ <b>Alpha Vantage erschöpft!</b><br>
             Limit: 25/Tag pro Key<br>
             Morgen wieder verfügbar
@@ -2127,7 +1867,7 @@ def main():
         
         results_sorted = sorted(results, key=lambda x: (x['score'], x['pullback_pct']), reverse=True)
         
-        # KORRIGIERTE Grid-Anzeige
+        # KORRIGIERTE Grid-Anzeige mit der neuen render_card Funktion
         cols = st.columns(4)
         for i, r in enumerate(results_sorted[:16]):
             with cols[i % 4]:
