@@ -1,5 +1,5 @@
 """
-Elite Bull Scanner Pro V8.1 - BALANCED Edition (FIXED RENDERING)
+Elite Bull Scanner Pro V8.2 - BALANCED Edition (PRE-MARKET & CATALYST READY)
 """
 
 import streamlit as st
@@ -35,7 +35,7 @@ st.markdown("""
         border: 1px solid #333; 
         border-radius: 10px; 
         padding: 15px; 
-        margin: 10px 0; 
+        margin: 10px 0;
         background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
         box-shadow: 0 4px 6px rgba(0,0,0,0.3);
         transition: transform 0.2s;
@@ -73,6 +73,7 @@ st.markdown("""
 
 class SourceType(str, Enum):
     WATCHLIST = "watchlist"
+    CATALYST = "catalyst"
     GAINERS = "gainers"
     MOST_ACTIVE = "most_active"
     UNKNOWN = "unknown"
@@ -122,7 +123,7 @@ class ScanResult:
 
 # ============================== KONFIGURATION ==============================
 
-st.set_page_config(layout="wide", page_title="Elite Bull Scanner Pro V8.1", page_icon="🐂")
+st.set_page_config(layout="wide", page_title="Elite Bull Scanner Pro V8.2", page_icon="🐂")
 
 MIN_PULLBACK_PERCENT = 0.02
 MAX_PULLBACK_PERCENT = 0.70
@@ -143,7 +144,7 @@ except Exception as e:
     FINNHUB_KEYS = []
     ALPHA_VANTAGE_KEYS = []
 
-DEFAULT_WATCHLIST = sorted(list(set([
+BASE_WATCHLIST = [
     "NVDA", "TSLA", "AMD", "PLTR", "COIN", "MSTR", "HOOD", "CRWD", "AAPL", "MSFT", 
     "AMZN", "MARA", "SAP", "LLY", "ABBV", "JNJ", "PFE", "MRK", "BMY", "GILD", "AMGN", 
     "BIIB", "VRTX", "REGN", "MRNA", "BNTX", "GSK", "AZN", "SNY", "JAZZ", "ALNY", "IONS", 
@@ -151,7 +152,17 @@ DEFAULT_WATCHLIST = sorted(list(set([
     "RCKT", "APLS", "HALO", "AQST", "IBRX", "ASND", "DNLI", "ALDX", "LNTH", "REPL", 
     "CING", "ACHV", "ATRA", "TBPH", "ROG", "ETON", "BMRN", "CRVS", "NVAX", "UUUU", 
     "CELC", "RAPT", "ACRS"
-])))
+]
+
+# NEU: Pharma/Biotech Catalyst Watchlist
+# Trage hier manuell die Ticker ein, die in den nächsten 30 Tagen FDA-News oder 
+# Studiendaten erwarten. 
+PHARMA_CATALYST_WATCHLIST = [
+    # Beispiel-Ticker (bitte selbst aktuell halten):
+    # "VKTX", "CRBU" 
+]
+
+DEFAULT_WATCHLIST = sorted(list(set(BASE_WATCHLIST + PHARMA_CATALYST_WATCHLIST)))
 
 FALLBACK_MOVERS = {
     'gainers': ["MARA", "RIOT", "HUT", "COIN", "HOOD", "MSTR", "NVDA", "AMD", "PLTR", "TSLA"],
@@ -163,6 +174,7 @@ FALLBACK_MOVERS = {
 def init_session_state():
     defaults = {
         'watchlist': DEFAULT_WATCHLIST,
+        'catalyst_list': PHARMA_CATALYST_WATCHLIST,
         'sent_alerts': {},
         'api_stats': {'yahoo': 0, 'finnhub': 0, 'alpha_vantage': 0, 'cache_hits': 0, 'alpha_rotation_count': 0},
         'scan_results': [],
@@ -254,7 +266,7 @@ class AlphaVantageManager:
                     stats = st.session_state.get('api_stats', {})
                     if isinstance(stats, dict):
                         stats['alpha_rotation_count'] = stats.get('alpha_rotation_count', 0) + 1
-                        st.session_state['api_stats'] = stats
+                    st.session_state['api_stats'] = stats
                     return self.get_current_key()
         return None
         
@@ -313,7 +325,9 @@ def get_market_clock() -> Dict[str, Any]:
     now = datetime.now(et)
     market_open = now.replace(hour=9, minute=30, second=0, microsecond=0)
     market_close = now.replace(hour=16, minute=0, second=0, microsecond=0)
-    pre_market = now.replace(hour=4, minute=0, second=0, microsecond=0)
+    
+    # NEU: Pre-Market ab 07:00 ET (entspricht 13:00 MEZ)
+    pre_market = now.replace(hour=7, minute=0, second=0, microsecond=0)
 
     holidays_2026 = [(1, 1), (1, 19), (2, 16), (4, 3), (5, 25), (6, 19), (7, 3), (9, 7), (11, 26), (12, 25)]
     is_holiday = (now.month, now.day) in holidays_2026
@@ -328,7 +342,7 @@ def get_market_clock() -> Dict[str, Any]:
         status = "CLOSED"
         color = "#ff4b4b"
         countdown = f"Pre-market in {str(pre_market - now)[:8]}"
-        next_event = "04:00 ET"
+        next_event = "07:00 ET"
         progress = 0
     elif now < market_open:
         status = "PRE-MARKET"
@@ -475,6 +489,8 @@ def get_combined_universe(force_refresh: bool = False) -> Tuple[Set[str], str]:
     return st.session_state['combined_universe'], st.session_state.get('movers_source', 'fallback')
 
 def get_symbol_source(symbol: str) -> SourceType:
+    if symbol in st.session_state.get('catalyst_list', []):
+        return SourceType.CATALYST
     if symbol in st.session_state['watchlist']:
         return SourceType.WATCHLIST
     movers = st.session_state.get('top_movers_cache', {})
@@ -544,6 +560,7 @@ def analyze_news_tiered(symbol: str, tier: int, score: int) -> Tuple[List[Dict],
         news, cached = get_finnhub_news_smart(symbol)
         if news:
             sources = ['FH']
+            # Europäische/Deutsche Begriffe sind hier weiterhin integriert:
             bullish_kws = ['bullish', 'upgrade', 'beat', 'growth', 'positive', 'strong', 'zulassung', 'übernahmeangebot', 'quartalszahlen']
             bearish_kws = ['bearish', 'downgrade', 'miss', 'loss', 'negative', 'weak']
             
@@ -794,12 +811,12 @@ def analyze_structure(df: Optional[pd.DataFrame], symbol: Optional[str] = None) 
             if not all(np.isfinite([highs[i], highs[i-1], highs[i-2], highs[i+1], highs[i+2]])):
                 continue
             if (highs[i] > highs[i-1] and highs[i] > highs[i-2] and 
-                highs[i] > highs[i+1] and highs[i] > highs[i+2]):
+                  highs[i] > highs[i+1] and highs[i] > highs[i+2]):
                 swing_highs.append((i, float(highs[i])))
             if not all(np.isfinite([lows[i], lows[i-1], lows[i-2], lows[i+1], lows[i+2]])):
                 continue
             if (lows[i] < lows[i-1] and lows[i] < lows[i-2] and 
-                lows[i] < lows[i+1] and lows[i] < lows[i+2]):
+                 lows[i] < lows[i+1] and lows[i] < lows[i+2]):
                 swing_lows.append((i, float(lows[i])))
         if len(swing_highs) >= 2 and len(swing_lows) >= 2:
             hh = swing_highs[-1][1] > swing_highs[-2][1]
@@ -825,7 +842,7 @@ def analyze_structure(df: Optional[pd.DataFrame], symbol: Optional[str] = None) 
                 'last_swing_high': float(swing_highs[-1][1])
             }
         else:
-            result = _default_structure_result(df_clean)
+             result = _default_structure_result(df_clean)
         if symbol:
             structure_cache.set(cache_key, result)
         return result
@@ -881,7 +898,7 @@ def get_alpha_vantage_smart(symbol: str) -> Tuple[Optional[Dict], bool]:
                 'function': 'OVERVIEW',
                 'symbol': symbol,
                 'apikey': current_key
-            }
+             }
             try:
                 response = safe_requests_get(url, params, timeout=15)
                 if response:
@@ -905,7 +922,7 @@ def get_alpha_vantage_smart(symbol: str) -> Tuple[Optional[Dict], bool]:
                         alpha_manager.record_call()
                         return result, False
                     else:
-                        return None, False
+                         return None, False
                 else:
                     alpha_manager.rotate_key()
                     attempts += 1
@@ -976,7 +993,7 @@ class ThreadPoolBullScanner:
         cache_key = f"yh_{symbol}"
         cached = self._yahoo_cache.get(cache_key, 300)
         if cached is not None:
-            return cached
+             return cached
         
         with self._yahoo_lock:
             now = time.time()
@@ -988,7 +1005,20 @@ class ThreadPoolBullScanner:
         max_retries = 3
         for attempt in range(max_retries):
             try:
-                df = yf.Ticker(symbol).history(period='3mo', interval='1d')
+                ticker = yf.Ticker(symbol)
+                df = ticker.history(period='3mo', interval='1d')
+                
+                # --- PRE-MARKET FIX ---
+                # Aktuellen (Pre-Market) Preis holen und in die letzte Kerze integrieren
+                try:
+                    current_pm_price = ticker.fast_info.last_price
+                    if current_pm_price and current_pm_price > 0:
+                        df.iloc[-1, df.columns.get_loc('Close')] = current_pm_price
+                        df.iloc[-1, df.columns.get_loc('High')] = max(float(df.iloc[-1]['High']), current_pm_price)
+                        df.iloc[-1, df.columns.get_loc('Low')] = min(float(df.iloc[-1]['Low']), current_pm_price)
+                except Exception as pm_e:
+                    logger.debug(f"Pre-Market Preis für {symbol} konnte nicht geladen werden: {pm_e}")
+                # ----------------------
                 
                 if not df.empty:
                     stats = st.session_state.get('api_stats', {})
@@ -1074,9 +1104,9 @@ class ThreadPoolBullScanner:
             return None
         
         if current_price < last_swing_low * 0.85:
-            debug_info['errors'].append("Preis zu weit unter Swing Low")
-            _log_scan_debug(debug_info)
-            return None
+             debug_info['errors'].append("Preis zu weit unter Swing Low")
+             _log_scan_debug(debug_info)
+             return None
         
         candlestick = analyze_candlestick(df_clean, last_swing_low, recent_high)
         debug_info['checks']['candlestick_pattern'] = candlestick.pattern.value
@@ -1124,8 +1154,8 @@ class ThreadPoolBullScanner:
             if candlestick.confirmation:
                 score += 10
         else:
-            candlestick_penalty = 5
-            score -= candlestick_penalty
+             candlestick_penalty = 5
+             score -= candlestick_penalty
         
         news, sources, cached_news = analyze_news_tiered(symbol, tier, score)
         if news:
@@ -1160,9 +1190,9 @@ class ThreadPoolBullScanner:
         
         rr_ratio = (target - current_price) / (current_price - stop_loss) if (current_price - stop_loss) > 0 else 0
         if rr_ratio < 0.8:
-            debug_info['errors'].append(f"R:R {rr_ratio:.2f} zu niedrig (min: 0.8)")
-            _log_scan_debug(debug_info)
-            return None
+             debug_info['errors'].append(f"R:R {rr_ratio:.2f} zu niedrig (min: 0.8)")
+             _log_scan_debug(debug_info)
+             return None
         
         effective_threshold = MIN_SCORE_THRESHOLD
         if score < effective_threshold:
@@ -1186,7 +1216,7 @@ class ThreadPoolBullScanner:
         if candlestick.strength >= MIN_CANDLESTICK_STRENGTH:
             reasons.append(f"🕯️ {candlestick.pattern.value}")
             if candlestick.confirmation:
-                reasons.append("✅ Confirm")
+                 reasons.append("✅ Confirm")
         else:
             reasons.append("⚠️ Kein Candlestick")
         
@@ -1317,6 +1347,7 @@ def send_telegram_alert(symbol: str, price: float, pullback_pct: float, news_ite
     
     source_emoji = {
         SourceType.WATCHLIST: '📋',
+        SourceType.CATALYST: '🧬',
         SourceType.GAINERS: '🚀',
         SourceType.MOST_ACTIVE: '🔥'
     }.get(source, '📊')
@@ -1346,12 +1377,9 @@ def send_telegram_alert(symbol: str, price: float, pullback_pct: float, news_ite
     except:
         return False
 
-# ============================== KARTEN RENDERING - KORRIGIERT ==============================
+# ============================== KARTEN RENDERING ==============================
 
 def render_card(item: Dict, container):
-    """
-    KORRIGIERTE Version: Verwendet st.components.v1.html für zuverlässiges Rendering
-    """
     with container:
         sym = item['symbol']
         price = item['price']
@@ -1377,9 +1405,11 @@ def render_card(item: Dict, container):
         pullback_color = '#ff6b6b' if pullback > 0.15 else '#ffa502'
         conf_color = '#9933ff' if score > 85 else '#FFD700' if score > 70 else '#00FF00'
         
-        # Source Badge
         if source == SourceType.WATCHLIST:
             source_badge = '📋 WL'
+            source_class = 'tier-badge'
+        elif source == SourceType.CATALYST:
+            source_badge = '🧬 CATALYST'
             source_class = 'tier-badge'
         elif source == SourceType.GAINERS:
             source_badge = '🚀 GAINER'
@@ -1391,7 +1421,6 @@ def render_card(item: Dict, container):
             source_badge = '📊'
             source_class = 'tier-badge'
         
-        # Candlestick Badge
         if has_candle:
             candle_text = f"{candlestick.pattern.value.upper()} {candlestick.strength}"
             candle_class = 'candlestick-badge'
@@ -1404,7 +1433,6 @@ def render_card(item: Dict, container):
             candle_class = 'candlestick-badge weak'
             candle_style = ''
         
-        # Structure Badge
         if structure_intact:
             struct_text = '📈 HH+HL'
             struct_class = 'structure-badge'
@@ -1412,17 +1440,13 @@ def render_card(item: Dict, container):
             struct_text = '📈 HL'
             struct_class = 'structure-badge weak'
         
-        # API Badges
         api_badges = ''.join([f'<span class="tier-badge">{a}</span>' for a in apis])
         cache_badge = '<span class="cache-badge">CACHE</span>' if cached else ''
         
-        # HTML für die Karte - EINZEILIG um Parsing-Fehler zu vermeiden
         card_html = f'<div class="bull-card"><div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;"><h3 style="margin:0; color:#fff;">🐂 {sym}</h3><span class="{source_class}">{source_badge}</span></div><div style="margin-bottom:8px;"><span class="pullback-badge" style="background: {pullback_color};">-{pullback:.1%}</span></div><div style="margin: 5px 0;"><span class="tier-badge">T{tier}</span>{api_badges}{cache_badge}<span class="{struct_class}">{struct_text}</span></div><div style="margin: 5px 0;"><span class="{candle_class}" style="{candle_style}">{candle_text}</span></div><div class="price">${price:.2f}</div><div style="font-size: 0.8rem; color: #aaa; margin: 8px 0; line-height:1.4;">{reasons}</div><div style="margin: 8px 0;"><span class="stop-loss">SL ${sl:.2f}</span><span class="target">TP ${target:.2f}</span></div><div style="font-size: 0.8rem; color: {conf_color}; margin: 5px 0; font-weight:bold;">Score: {score}/100</div><div class="confidence-bar"><div class="confidence-fill" style="width: {score}%; background: {conf_color};"></div></div><div style="font-size: 0.75rem; color: #888; margin: 5px 0;">R:R {rr:.1f}x | Vol {rvol:.1f}x</div><a href="{news_url}" target="_blank" class="news-link-btn">📰 {news_title}</a><a href="{tv_url}" target="_blank" class="btn-link">📈 TradingView</a></div>'
         
-        # WICHTIG: Verwende st.markdown mit unsafe_allow_html=True
         st.markdown(card_html, unsafe_allow_html=True)
         
-        # Button separat
         unique_key = f"gemini_{sym}_{int(time.time() * 1000)}_{random.randint(1000,9999)}"
         if st.button(f"🤖 Gemini Check", key=unique_key):
             with st.spinner(f"Gemini analysiert {sym}..."):
@@ -1742,7 +1766,7 @@ def main():
             st.session_state['scan_debug'] = []
             
             scan_list = [(sym, get_symbol_source(sym)) for sym in universe]
-            scan_list.sort(key=lambda x: 0 if x[1] == SourceType.WATCHLIST else 1)
+            scan_list.sort(key=lambda x: 0 if x[1] == SourceType.CATALYST else 1 if x[1] == SourceType.WATCHLIST else 2)
             
             scanner = ThreadPoolBullScanner(max_workers=4, min_delay=1.0)
             
@@ -1772,7 +1796,7 @@ def main():
             
             hard_filter_active = st.session_state.get('hard_filter_active', False)
             if hard_filter_active:
-                st.success(f"✅ {len(results)} HARD-SETUPS in {elapsed:.1f}s gefunden")
+                 st.success(f"✅ {len(results)} HARD-SETUPS in {elapsed:.1f}s gefunden")
             else:
                 st.success(f"✅ {len(results)} BALANCED-SETUPS in {elapsed:.1f}s gefunden")
                 if filtered_by_candlestick[0] > 0:
@@ -1858,7 +1882,7 @@ def main():
             q_cols = st.columns(4)
             for i, (q, count) in enumerate(quality_dist.items()):
                 if count > 0:
-                    q_cols[i].metric(q.upper(), count)
+                     q_cols[i].metric(q.upper(), count)
             
             st.write("**📊 Erkannte Muster:**")
             st.write(", ".join([f"{p}: {c}" for p, c in pattern_dist.items() if c > 0]))
@@ -1867,7 +1891,6 @@ def main():
         
         results_sorted = sorted(results, key=lambda x: (x['score'], x['pullback_pct']), reverse=True)
         
-        # KORRIGIERTE Grid-Anzeige mit der neuen render_card Funktion
         cols = st.columns(4)
         for i, r in enumerate(results_sorted[:16]):
             with cols[i % 4]:
@@ -1912,10 +1935,10 @@ def main():
             remaining = (next_scan - datetime.now()).total_seconds()
             
             if remaining > 0:
-                mins, secs = divmod(int(remaining), 60)
-                st.sidebar.info(f"⏳ Nächster Autopilot-Scan in: {mins:02d}:{secs:02d} Min")
-                time.sleep(10)
-                st.rerun()
+                 mins, secs = divmod(int(remaining), 60)
+                 st.sidebar.info(f"⏳ Nächster Autopilot-Scan in: {mins:02d}:{secs:02d} Min")
+                 time.sleep(10)
+                 st.rerun()
             else:
                 st.rerun()
 
