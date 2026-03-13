@@ -1,5 +1,5 @@
 """
-Elite Bull Scanner Pro V8.2 - BALANCED Edition (PRE-MARKET & CATALYST READY)
+Elite Bull Scanner Pro V8.3 - BALANCED Edition (PRE-MARKET & UI CATALYST MANAGER)
 """
 
 import streamlit as st
@@ -123,7 +123,7 @@ class ScanResult:
 
 # ============================== KONFIGURATION ==============================
 
-st.set_page_config(layout="wide", page_title="Elite Bull Scanner Pro V8.2", page_icon="🐂")
+st.set_page_config(layout="wide", page_title="Elite Bull Scanner Pro V8.3", page_icon="🐂")
 
 MIN_PULLBACK_PERCENT = 0.02
 MAX_PULLBACK_PERCENT = 0.70
@@ -132,6 +132,8 @@ ALERT_COOLDOWN_MINUTES = 60
 MIN_SCORE_THRESHOLD = 55
 MIN_CANDLESTICK_STRENGTH = 40
 REQUIRE_CANDLESTICK_CONFIRM = False
+
+CATALYST_FILE = "catalysts.json"
 
 try:
     TELEGRAM_BOT_TOKEN = st.secrets["telegram"]["bot_token"]
@@ -154,27 +156,40 @@ BASE_WATCHLIST = [
     "CELC", "RAPT", "ACRS"
 ]
 
-# NEU: Pharma/Biotech Catalyst Watchlist
-# Trage hier manuell die Ticker ein, die in den nächsten 30 Tagen FDA-News oder 
-# Studiendaten erwarten. 
-PHARMA_CATALYST_WATCHLIST = [
-    # Beispiel-Ticker (bitte selbst aktuell halten):
-    # "VKTX", "CRBU" 
-]
-
-DEFAULT_WATCHLIST = sorted(list(set(BASE_WATCHLIST + PHARMA_CATALYST_WATCHLIST)))
-
 FALLBACK_MOVERS = {
     'gainers': ["MARA", "RIOT", "HUT", "COIN", "HOOD", "MSTR", "NVDA", "AMD", "PLTR", "TSLA"],
     'most_active': ["TSLA", "NVDA", "AMD", "PLTR", "COIN", "MSTR", "HOOD", "AAPL", "MSFT", "AMZN"]
 }
 
+# ============================== JSON Management ==============================
+
+def load_catalysts() -> List[str]:
+    if os.path.exists(CATALYST_FILE):
+        try:
+            with open(CATALYST_FILE, "r") as f:
+                return json.load(f)
+        except Exception as e:
+            logger.error(f"Fehler beim Laden der Catalyst-Liste: {e}")
+            return []
+    return []
+
+def save_catalysts(catalysts: List[str]):
+    try:
+        with open(CATALYST_FILE, "w") as f:
+            json.dump(list(set(catalysts)), f)
+    except Exception as e:
+        logger.error(f"Fehler beim Speichern der Catalyst-Liste: {e}")
+
 # ============================== Session State ==============================
 
 def init_session_state():
+    if 'catalyst_list' not in st.session_state:
+        st.session_state['catalyst_list'] = load_catalysts()
+        
+    combined_watchlist = sorted(list(set(BASE_WATCHLIST + st.session_state['catalyst_list'])))
+    
     defaults = {
-        'watchlist': DEFAULT_WATCHLIST,
-        'catalyst_list': PHARMA_CATALYST_WATCHLIST,
+        'watchlist': combined_watchlist,
         'sent_alerts': {},
         'api_stats': {'yahoo': 0, 'finnhub': 0, 'alpha_vantage': 0, 'cache_hits': 0, 'alpha_rotation_count': 0},
         'scan_results': [],
@@ -186,7 +201,7 @@ def init_session_state():
         'alert_history': [],
         'scan_debug': [],
         'top_movers_cache': FALLBACK_MOVERS,
-        'combined_universe': set(DEFAULT_WATCHLIST + [s for sublist in FALLBACK_MOVERS.values() for s in sublist]),
+        'combined_universe': set(combined_watchlist + [s for sublist in FALLBACK_MOVERS.values() for s in sublist]),
         'movers_source': 'fallback',
         'hard_filter_active': False,
     }
@@ -325,8 +340,6 @@ def get_market_clock() -> Dict[str, Any]:
     now = datetime.now(et)
     market_open = now.replace(hour=9, minute=30, second=0, microsecond=0)
     market_close = now.replace(hour=16, minute=0, second=0, microsecond=0)
-    
-    # NEU: Pre-Market ab 07:00 ET (entspricht 13:00 MEZ)
     pre_market = now.replace(hour=7, minute=0, second=0, microsecond=0)
 
     holidays_2026 = [(1, 1), (1, 19), (2, 16), (4, 3), (5, 25), (6, 19), (7, 3), (9, 7), (11, 26), (12, 25)]
@@ -479,6 +492,9 @@ def get_combined_universe(force_refresh: bool = False) -> Tuple[Set[str], str]:
         st.session_state['movers_source'] = source
         
         combined = set(st.session_state['watchlist'])
+        # Auch manuell hinzugefügte Catalysts sicherstellen
+        combined.update(st.session_state.get('catalyst_list', []))
+        
         for category, symbols in movers.items():
             combined.update(symbols)
         
@@ -486,12 +502,17 @@ def get_combined_universe(force_refresh: bool = False) -> Tuple[Set[str], str]:
         logger.info(f"Universum aktualisiert: {len(combined)} Symbole (Source: {source})")
         return combined, source
     
-    return st.session_state['combined_universe'], st.session_state.get('movers_source', 'fallback')
+    combined = set(st.session_state['watchlist'])
+    combined.update(st.session_state.get('catalyst_list', []))
+    for category, symbols in st.session_state.get('top_movers_cache', {}).items():
+        combined.update(symbols)
+    
+    return combined, st.session_state.get('movers_source', 'fallback')
 
 def get_symbol_source(symbol: str) -> SourceType:
     if symbol in st.session_state.get('catalyst_list', []):
         return SourceType.CATALYST
-    if symbol in st.session_state['watchlist']:
+    if symbol in st.session_state.get('watchlist', []):
         return SourceType.WATCHLIST
     movers = st.session_state.get('top_movers_cache', {})
     if symbol in movers.get('gainers', []):
@@ -560,7 +581,6 @@ def analyze_news_tiered(symbol: str, tier: int, score: int) -> Tuple[List[Dict],
         news, cached = get_finnhub_news_smart(symbol)
         if news:
             sources = ['FH']
-            # Europäische/Deutsche Begriffe sind hier weiterhin integriert:
             bullish_kws = ['bullish', 'upgrade', 'beat', 'growth', 'positive', 'strong', 'zulassung', 'übernahmeangebot', 'quartalszahlen']
             bearish_kws = ['bearish', 'downgrade', 'miss', 'loss', 'negative', 'weak']
             
@@ -1008,8 +1028,6 @@ class ThreadPoolBullScanner:
                 ticker = yf.Ticker(symbol)
                 df = ticker.history(period='3mo', interval='1d')
                 
-                # --- PRE-MARKET FIX ---
-                # Aktuellen (Pre-Market) Preis holen und in die letzte Kerze integrieren
                 try:
                     current_pm_price = ticker.fast_info.last_price
                     if current_pm_price and current_pm_price > 0:
@@ -1018,7 +1036,6 @@ class ThreadPoolBullScanner:
                         df.iloc[-1, df.columns.get_loc('Low')] = min(float(df.iloc[-1]['Low']), current_pm_price)
                 except Exception as pm_e:
                     logger.debug(f"Pre-Market Preis für {symbol} konnte nicht geladen werden: {pm_e}")
-                # ----------------------
                 
                 if not df.empty:
                     stats = st.session_state.get('api_stats', {})
@@ -1489,6 +1506,7 @@ def main():
                 st.session_state['top_movers_cache'] = movers
                 st.session_state['movers_source'] = source
                 combined = set(st.session_state['watchlist'])
+                combined.update(st.session_state.get('catalyst_list', []))
                 for category, symbols in movers.items():
                     combined.update(symbols)
                 st.session_state['combined_universe'] = combined
@@ -1504,6 +1522,41 @@ def main():
         st.header("🤖 Autopilot (24/7)")
         auto_pilot = st.toggle("Autopilot aktivieren", value=st.session_state.get('auto_refresh', False), help="Scannt automatisch alle 30 Minuten")
         st.session_state['auto_refresh'] = auto_pilot
+        st.divider()
+
+        # --- NEU: Catalyst Manager ---
+        st.header("🧬 Catalyst Manager")
+        with st.expander("Pharma/Biotech Liste verwalten", expanded=False):
+            st.write("Verwalte hier Aktien, die in Kürze Studienergebnisse erwarten.")
+            
+            # 1. Hinzufügen
+            new_ticker = st.text_input("Ticker hinzufügen:").strip().upper()
+            if st.button("➕ Speichern"):
+                if new_ticker and new_ticker not in st.session_state['catalyst_list']:
+                    st.session_state['catalyst_list'].append(new_ticker)
+                    save_catalysts(st.session_state['catalyst_list'])
+                    st.success(f"{new_ticker} wurde hinzugefügt!")
+                    st.rerun()
+                elif new_ticker in st.session_state['catalyst_list']:
+                    st.warning("Ticker existiert bereits.")
+            
+            st.divider()
+            
+            # 2. Entfernen / Anzeigen
+            if st.session_state['catalyst_list']:
+                st.write("**Aktuelle Catalyst-Liste:**")
+                st.write(", ".join(st.session_state['catalyst_list']))
+                
+                to_remove = st.multiselect("Ticker entfernen:", st.session_state['catalyst_list'])
+                if st.button("🗑️ Ausgewählte löschen"):
+                    for t in to_remove:
+                        st.session_state['catalyst_list'].remove(t)
+                    save_catalysts(st.session_state['catalyst_list'])
+                    st.success("Erfolgreich gelöscht!")
+                    st.rerun()
+            else:
+                st.info("Die Liste ist momentan leer.")
+        
         st.divider()
 
         st.header("🎛️ Filter Einstellungen")
@@ -1640,6 +1693,7 @@ def main():
                     st.session_state['top_movers_cache'] = movers
                     st.session_state['movers_source'] = source
                     combined = set(st.session_state['watchlist'])
+                    combined.update(st.session_state.get('catalyst_list', []))
                     for category, symbols in movers.items():
                         combined.update(symbols)
                     st.session_state['combined_universe'] = combined
@@ -1716,7 +1770,10 @@ def main():
             st.session_state['top_movers_cache'] = FALLBACK_MOVERS
             st.session_state['movers_source'] = 'fallback'
             st.session_state['last_movers_check'] = 0
-            st.session_state['combined_universe'] = set(DEFAULT_WATCHLIST + [s for sublist in FALLBACK_MOVERS.values() for s in sublist])
+            
+            combined_watchlist = sorted(list(set(BASE_WATCHLIST + st.session_state.get('catalyst_list', []))))
+            st.session_state['combined_universe'] = set(combined_watchlist + [s for sublist in FALLBACK_MOVERS.values() for s in sublist])
+            
             for i in alpha_manager.limiters:
                 alpha_manager.limiters[i]['exhausted'] = False
                 alpha_manager.limiters[i]['calls_today'] = 0
@@ -1753,10 +1810,11 @@ def main():
             
             universe, source = get_combined_universe()
             watchlist_count = len(st.session_state['watchlist'])
-            movers_count = len(universe) - watchlist_count
+            catalyst_count = len(st.session_state.get('catalyst_list', []))
+            movers_count = len(universe) - watchlist_count - catalyst_count
             
             filter_mode = "🔥 HARD (Nur Candlestick)" if st.session_state.get('hard_filter_active', False) else "✅ BALANCED (Candlestick als Bonus)"
-            st.info(f"📊 Modus: **{filter_mode}** | Scanne {len(universe)} Symbole ({watchlist_count} Watchlist + {movers_count} Movers)")
+            st.info(f"📊 Modus: **{filter_mode}** | Scanne {len(universe)} Symbole ({watchlist_count} Watchlist + {catalyst_count} Catalyst + {movers_count} Movers)")
             
             with st.expander("Aktive Filter"):
                 st.write(f"- Pullback: {MIN_PULLBACK_PERCENT:.0%} - {MAX_PULLBACK_PERCENT:.0%}")
@@ -1908,6 +1966,7 @@ def main():
             movers_source = st.session_state.get('movers_source', 'fallback')
             st.write(f"**Scan-Universum:** {len(universe)} Symbole (Movers: {movers_source})")
             st.write(f"- Watchlist: {len(st.session_state['watchlist'])}")
+            st.write(f"- Catalyst: {len(st.session_state.get('catalyst_list', []))}")
             movers = st.session_state.get('top_movers_cache', {})
             if movers:
                 st.write(f"- Gainers: {len(movers.get('gainers', []))}")
