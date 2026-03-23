@@ -352,8 +352,9 @@ class AlphaVantageManager:
 
 finnhub_limiter = RateLimiter(60, 60)
 alpha_manager = AlphaVantageManager(ALPHA_VANTAGE_KEYS)
-# FIX V9.1: Gemini Rate Limiter — konservativ 10/Min (Free Tier = 15/Min)
-gemini_limiter = RateLimiter(10, 60)
+# FIX V9.2: Gemini Rate Limiter — 5/Min (sehr konservativ)
+# Warum 5 statt 10: 3 Threads × viele News = zu schnell für Free Tier
+gemini_limiter = RateLimiter(5, 60)
 
 # ============================== Helper Functions ==============================
 
@@ -406,47 +407,52 @@ def get_market_clock() -> Dict[str, Any]:
 
 def get_market_context() -> Dict[str, Any]:
     cache_key = "market_ctx"
-    cached = market_context_cache.get(cache_key, 3600)
+    # FIX V9.2: Cache TTL erhöht auf 7200s (2h) — Yahoo nicht bei jedem Scan neu fragen
+    cached = market_context_cache.get(cache_key, 7200)
     if cached:
         return cached
+
+    # Neutraler Default — wird überschrieben wenn Yahoo antwortet
+    default = {'risk_off': False, 'spy_change': 0, 'vix_level': 20, 'market_closed': False}
+
     try:
-        # FIX V9.1: 2s statt 1s — Yahoo braucht mehr Abstand
-        time.sleep(2)
-        spy = yf.Ticker("SPY")
-        spy_data = spy.history(period="5d")
+        # FIX V9.2: yf.download statt Ticker.history — stabiler bei Rate Limits
+        time.sleep(3)
+        spy_data = yf.download("SPY", period="5d", progress=False, auto_adjust=True)
 
-        if len(spy_data) < 2:
-            result = {'risk_off': False, 'spy_change': 0, 'market_closed': True}
-            market_context_cache.set(cache_key, result)
-            return result
+        if spy_data is None or len(spy_data) < 2:
+            market_context_cache.set(cache_key, default)
+            return default
 
-        spy_change = (spy_data['Close'].iloc[-1] - spy_data['Close'].iloc[-2]) / spy_data['Close'].iloc[-2]
+        spy_change = float(
+            (spy_data['Close'].iloc[-1] - spy_data['Close'].iloc[-2]) /
+            spy_data['Close'].iloc[-2]
+        )
         vix_level = 20
 
         if abs(spy_change) > 0.01:
             try:
-                # FIX V9.1: 3s statt 0.5s
-                time.sleep(3)
-                vix = yf.Ticker("^VIX")
-                vix_data = vix.history(period="2d")
-                vix_level = vix_data['Close'].iloc[-1] if not vix_data.empty else 20
+                time.sleep(4)
+                vix_data = yf.download("^VIX", period="2d", progress=False, auto_adjust=True)
+                if vix_data is not None and not vix_data.empty:
+                    vix_level = float(vix_data['Close'].iloc[-1])
             except Exception:
-                vix_level = 20  # VIX nicht kritisch, weitermachen
+                pass  # VIX nicht kritisch
 
-        risk_off = (spy_change < -0.02) or (vix_level > 30)
         result = {
-            'risk_off': risk_off, 'spy_change': spy_change,
-            'vix_level': vix_level, 'market_closed': False
+            'risk_off': (spy_change < -0.02) or (vix_level > 30),
+            'spy_change': spy_change,
+            'vix_level': vix_level,
+            'market_closed': False
         }
         market_context_cache.set(cache_key, result)
         return result
 
     except Exception as e:
         logger.error(f"Fehler beim Marktkontext: {e}")
-        # FIX V9.1: Bei 429 nicht market_closed=True — einfach Risk-On annehmen
-        result = {'risk_off': False, 'spy_change': 0, 'vix_level': 20, 'market_closed': False}
-        market_context_cache.set(cache_key, result)
-        return result
+        # FIX V9.2: Immer neutral cachen bei Fehler — nicht bei jedem Scan wiederholen
+        market_context_cache.set(cache_key, default)
+        return default
 
 # ============================== Top Movers ==============================
 
@@ -593,11 +599,11 @@ def get_gemini_news_score(symbol: str, news_items: List[Dict]) -> GeminiNewsScor
             is_real_catalyst=False
         )
 
-    # FIX V9.1: Warten bis Rate Limit-Slot frei (max 60s)
+    # FIX V9.2: Warten bis Slot frei — max 12 × 5s = 60s
     wait_attempts = 0
-    while not gemini_limiter.can_call() and wait_attempts < 6:
-        logger.info(f"Gemini Rate Limit — warte 10s ({symbol})")
-        time.sleep(10)
+    while not gemini_limiter.can_call() and wait_attempts < 12:
+        logger.info(f"Gemini Rate Limit — warte 5s ({symbol})")
+        time.sleep(5)
         wait_attempts += 1
 
     if not gemini_limiter.can_call():
