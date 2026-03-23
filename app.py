@@ -362,6 +362,9 @@ class AlphaVantageManager:
 finnhub_limiter = RateLimiter(60, 60)
 alpha_manager = AlphaVantageManager(ALPHA_VANTAGE_KEYS)
 
+# Gemini Free Tier: max 10 Requests/Minute (konservativ, echtes Limit ist 15)
+gemini_limiter = RateLimiter(10, 60)
+
 # ============================== Helper Functions ==============================
 
 def safe_requests_get(url: str, params: Optional[Dict] = None,
@@ -577,19 +580,18 @@ def get_finnhub_news_smart(symbol: str) -> Tuple[Optional[List[Dict]], bool]:
 
 def get_gemini_news_score(symbol: str, news_items: List[Dict]) -> GeminiNewsScore:
     """
-    V9: Gemini bewertet News automatisch beim Scan.
-    Ersetzt das naive Keyword-Matching vollständig.
-    Ergebnis wird gecacht um API-Calls zu minimieren.
+    V9.1: Gemini bewertet News automatisch beim Scan.
+    - Rate Limiter: max 10 Calls/Minute (Free Tier sicher)
+    - Retry mit Backoff bei 429 RESOURCE_EXHAUSTED
+    - Cache verhindert doppelte Calls für gleiche News
     """
     if not news_items:
         return GeminiNewsScore(
-            score=0,
-            catalyst_type="NONE",
-            reasoning="Keine News verfügbar",
-            is_real_catalyst=False
+            score=0, catalyst_type="NONE",
+            reasoning="Keine News verfügbar", is_real_catalyst=False
         )
 
-    # Cache-Key basiert auf dem neuesten News-Titel (ändert sich wenn neue News kommen)
+    # Cache prüfen — gleiche News nie zweimal bewerten
     latest_title = news_items[0].get('title', '')
     cache_key = f"gemini_news_{symbol}_{hash(latest_title) % 100000}"
     cached = gemini_news_cache.get(cache_key, AUTO_REFRESH_INTERVAL)
@@ -598,11 +600,25 @@ def get_gemini_news_score(symbol: str, news_items: List[Dict]) -> GeminiNewsScor
         return GeminiNewsScore(**cached)
 
     if "gemini" not in st.secrets or "api_key" not in st.secrets.get("gemini", {}):
-        # Fallback: kein Gemini → neutraler Score, kein Catalyst
         return GeminiNewsScore(
-            score=30,
-            catalyst_type="NO_API",
+            score=30, catalyst_type="NO_API",
             reasoning="Gemini API nicht konfiguriert — neutrale Bewertung",
+            is_real_catalyst=False
+        )
+
+    # Rate Limiter: warten wenn nötig (max 10 Calls/Min)
+    # Statt sofort zu scheitern warten wir bis zu 60s
+    wait_attempts = 0
+    while not gemini_limiter.can_call() and wait_attempts < 6:
+        logger.info(f"Gemini Rate Limit erreicht — warte 10s (Symbol: {symbol})")
+        time.sleep(10)
+        wait_attempts += 1
+
+    if not gemini_limiter.can_call():
+        # Nach 60s immer noch kein Slot → neutraler Fallback, kein Fehler
+        return GeminiNewsScore(
+            score=25, catalyst_type="RATE_LIMITED",
+            reasoning="Gemini Rate Limit — Bewertung übersprungen",
             is_real_catalyst=False
         )
 
@@ -632,48 +648,62 @@ Scoring-Regeln:
 
 is_real_catalyst = true NUR bei: FDA-Zulassung, M&A, Earnings-Überraschung, klinischer Studienerfolg"""
 
-    try:
-        client = genai.Client(api_key=st.secrets["gemini"]["api_key"])
-        response = client.models.generate_content(
-            model='gemini-2.5-flash',
-            contents=prompt,
-        )
-        raw = response.text.strip()
-        # JSON-Fences entfernen falls vorhanden
-        raw = raw.replace('```json', '').replace('```', '').strip()
-        data = json.loads(raw)
+    # Retry-Logik: bei 429 warten und nochmal versuchen
+    max_retries = 3
+    for attempt in range(max_retries):
+        try:
+            gemini_limiter.record_call()
+            client = genai.Client(api_key=st.secrets["gemini"]["api_key"])
+            response = client.models.generate_content(
+                model='gemini-2.5-flash',
+                contents=prompt,
+            )
+            raw = response.text.strip()
+            raw = raw.replace('```json', '').replace('```', '').strip()
+            data = json.loads(raw)
 
-        result = GeminiNewsScore(
-            score=int(data.get('score', 0)),
-            catalyst_type=str(data.get('catalyst_type', 'NONE')),
-            reasoning=str(data.get('reasoning', '')),
-            is_real_catalyst=bool(data.get('is_real_catalyst', False)),
-            from_cache=False
-        )
+            result = GeminiNewsScore(
+                score=int(data.get('score', 0)),
+                catalyst_type=str(data.get('catalyst_type', 'NONE')),
+                reasoning=str(data.get('reasoning', '')),
+                is_real_catalyst=bool(data.get('is_real_catalyst', False)),
+                from_cache=False
+            )
 
-        # Cache speichern
-        gemini_news_cache.set(cache_key, {
-            'score': result.score,
-            'catalyst_type': result.catalyst_type,
-            'reasoning': result.reasoning,
-            'is_real_catalyst': result.is_real_catalyst,
-            'from_cache': False
-        })
+            # Ergebnis cachen
+            gemini_news_cache.set(cache_key, {
+                'score': result.score,
+                'catalyst_type': result.catalyst_type,
+                'reasoning': result.reasoning,
+                'is_real_catalyst': result.is_real_catalyst,
+                'from_cache': False
+            })
 
-        stats = st.session_state.get('api_stats', {})
-        stats['gemini_news'] = stats.get('gemini_news', 0) + 1
-        st.session_state['api_stats'] = stats
+            stats = st.session_state.get('api_stats', {})
+            stats['gemini_news'] = stats.get('gemini_news', 0) + 1
+            st.session_state['api_stats'] = stats
 
-        return result
+            return result
 
-    except Exception as e:
-        logger.error(f"Gemini News Score Fehler für {symbol}: {e}")
-        return GeminiNewsScore(
-            score=25,
-            catalyst_type="ERROR",
-            reasoning=f"Gemini API Fehler: {str(e)[:60]}",
-            is_real_catalyst=False
-        )
+        except Exception as e:
+            err_str = str(e)
+            is_rate_limit = '429' in err_str or 'RESOURCE_EXHAUSTED' in err_str
+
+            if is_rate_limit and attempt < max_retries - 1:
+                # Exponentielles Backoff: 15s, 30s, 60s
+                wait_time = 15 * (2 ** attempt)
+                logger.warning(f"Gemini 429 für {symbol} — warte {wait_time}s (Versuch {attempt+1}/{max_retries})")
+                time.sleep(wait_time)
+                continue
+            else:
+                logger.error(f"Gemini News Score Fehler für {symbol}: {e}")
+                # Kein Crash — neutraler Score als Fallback
+                return GeminiNewsScore(
+                    score=20,
+                    catalyst_type="ERROR",
+                    reasoning="Gemini nicht verfügbar — technische Bewertung verwendet",
+                    is_real_catalyst=False
+                )
 
 
 def get_gemini_entry_analysis(item_data: dict) -> str:
