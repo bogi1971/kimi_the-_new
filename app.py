@@ -1203,7 +1203,7 @@ class ThreadPoolBullScanner:
         else:
             score -= 5
 
-        # ====== NEWS + GEMINI ======
+        # ====== NEWS laden (ohne Gemini — Gemini läuft nach dem ThreadPool) ======
         news, sources, cached_news = [], [], False
         gemini_news_result = None
 
@@ -1211,22 +1211,25 @@ class ThreadPoolBullScanner:
         if news_raw:
             news = news_raw
             sources.append('FH')
-            gemini_news_result = get_gemini_news_score(symbol, news)
-            debug_info['checks']['gemini_news_score'] = gemini_news_result.score
-            debug_info['checks']['gemini_catalyst_type'] = gemini_news_result.catalyst_type
-
-            if gemini_news_result.score >= 80:
-                score += 25
-            elif gemini_news_result.score >= 60:
-                score += 15
-            elif gemini_news_result.score >= GEMINI_MIN_CATALYST_SCORE:
-                score += 8
-            elif gemini_news_result.score < 20:
-                score -= 10
-
-            for item in news:
-                item['gemini_score'] = gemini_news_result.score
-                item['catalyst_type'] = gemini_news_result.catalyst_type
+            # Gemini-Score: NUR aus Cache lesen im Thread — kein neuer API-Call
+            latest_title = news[0].get('title', '')
+            cache_key_g = f"gemini_news_{symbol}_{hash(latest_title) % 100000}"
+            cached_g = gemini_news_cache.get(cache_key_g, AUTO_REFRESH_INTERVAL)
+            if cached_g:
+                cached_g['from_cache'] = True
+                gemini_news_result = GeminiNewsScore(**cached_g)
+                # Score aus Cache anwenden
+                if gemini_news_result.score >= 80:
+                    score += 25
+                elif gemini_news_result.score >= 60:
+                    score += 15
+                elif gemini_news_result.score >= GEMINI_MIN_CATALYST_SCORE:
+                    score += 8
+                elif gemini_news_result.score < 20:
+                    score -= 10
+            # Kein Cache → neutrale +5 als Platzhalter (Gemini bewertet später)
+            else:
+                score += 5  # News vorhanden = kleiner Bonus, Gemini ergänzt danach
         else:
             score -= 3
 
@@ -1260,8 +1263,11 @@ class ThreadPoolBullScanner:
             _log_scan_debug(debug_info)
             return None
 
-        if score < MIN_SCORE_THRESHOLD:
-            debug_info['errors'].append(f"Score {score} < {MIN_SCORE_THRESHOLD}")
+        # Score-Check ohne Gemini: Schwelle 10 Punkte niedriger
+        # (Gemini kann danach noch +25 hinzufügen oder -10 abziehen)
+        pre_gemini_threshold = MIN_SCORE_THRESHOLD - 10
+        if score < pre_gemini_threshold:
+            debug_info['errors'].append(f"Score {score} < {pre_gemini_threshold} (pre-Gemini)")
             _log_scan_debug(debug_info)
             return None
 
@@ -1339,6 +1345,43 @@ class ThreadPoolBullScanner:
                 completed += 1
                 if progress_callback:
                     progress_callback(completed, len(symbols), success_count, error_count, symbol, source)
+
+        # ====== V9.2: Gemini NACH dem ThreadPool — sequenziell, kein Race Condition ======
+        # Nur Symbole mit News und ohne gecachten Gemini-Score werden bewertet
+        needs_gemini = [r for r in results if r.get('news') and r.get('gemini_news') is None]
+        if needs_gemini and progress_callback:
+            progress_callback(len(symbols), len(symbols), success_count, error_count,
+                              "Gemini News-Scoring...", SourceType.UNKNOWN)
+
+        for r in needs_gemini:
+            sym = r['symbol']
+            gemini_result = get_gemini_news_score(sym, r['news'])
+            r['gemini_news'] = gemini_result
+
+            # Score nachträglich anpassen
+            if gemini_result.score >= 80:
+                r['score'] = min(100, r['score'] + 25 - 5)  # -5 weil vorher +5 Platzhalter
+            elif gemini_result.score >= 60:
+                r['score'] = min(100, r['score'] + 15 - 5)
+            elif gemini_result.score >= GEMINI_MIN_CATALYST_SCORE:
+                r['score'] = min(100, r['score'] + 8 - 5)
+            elif gemini_result.score < 20:
+                r['score'] = max(0, r['score'] - 10 - 5)
+            else:
+                r['score'] = max(0, r['score'] - 5)  # Platzhalter rückgängig, kein Bonus
+
+            # News mit Gemini-Score anreichern
+            for item in r['news']:
+                item['gemini_score'] = gemini_result.score
+                item['catalyst_type'] = gemini_result.catalyst_type
+
+            # Reasons aktualisieren
+            if gemini_result.score >= GEMINI_MIN_CATALYST_SCORE:
+                r['reasons'] = [x for x in r['reasons'] if not x.startswith('📰')]
+                r['reasons'].append(f"🤖 {gemini_result.catalyst_type}")
+
+        # Setups unter Schwelle nach Gemini-Korrektur entfernen
+        results = [r for r in results if r['score'] >= MIN_SCORE_THRESHOLD]
 
         return sorted(results, key=lambda x: (x['score'], x['pullback_pct']), reverse=True)
 
