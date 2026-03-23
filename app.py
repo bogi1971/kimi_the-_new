@@ -355,6 +355,9 @@ alpha_manager = AlphaVantageManager(ALPHA_VANTAGE_KEYS)
 # FIX V9.2: Gemini Rate Limiter — 5/Min (sehr konservativ)
 # Warum 5 statt 10: 3 Threads × viele News = zu schnell für Free Tier
 gemini_limiter = RateLimiter(5, 60)
+# Globaler Lock: stellt sicher dass Gemini-Calls wirklich serialisiert werden
+# (RateLimiter allein reicht nicht — Threads können gleichzeitig can_call()=True sehen)
+_gemini_global_lock = threading.Lock()
 
 # ============================== Helper Functions ==============================
 
@@ -599,26 +602,29 @@ def get_gemini_news_score(symbol: str, news_items: List[Dict]) -> GeminiNewsScor
             is_real_catalyst=False
         )
 
-    # FIX V9.2: Warten bis Slot frei — max 12 × 5s = 60s
-    wait_attempts = 0
-    while not gemini_limiter.can_call() and wait_attempts < 12:
-        logger.info(f"Gemini Rate Limit — warte 5s ({symbol})")
-        time.sleep(5)
-        wait_attempts += 1
+    # FIX V9.2: Globaler Lock — nur EIN Thread darf Gemini gleichzeitig aufrufen
+    # Ohne Lock: 3 Threads sehen alle can_call()=True und feuern gleichzeitig
+    with _gemini_global_lock:
+        # FIX V9.2: Warten bis Slot frei — max 12 × 5s = 60s
+        wait_attempts = 0
+        while not gemini_limiter.can_call() and wait_attempts < 12:
+            logger.info(f"Gemini Rate Limit — warte 5s ({symbol})")
+            time.sleep(5)
+            wait_attempts += 1
 
-    if not gemini_limiter.can_call():
-        return GeminiNewsScore(
-            score=25, catalyst_type="RATE_LIMITED",
-            reasoning="Gemini Rate Limit — Bewertung übersprungen",
-            is_real_catalyst=False
-        )
+        if not gemini_limiter.can_call():
+            return GeminiNewsScore(
+                score=25, catalyst_type="RATE_LIMITED",
+                reasoning="Gemini Rate Limit — Bewertung übersprungen",
+                is_real_catalyst=False
+            )
 
-    news_text = "\n".join([
-        f"- [{item.get('source', '')}] {item.get('title', '')}"
-        for item in news_items[:3]
-    ])
+        news_text = "\n".join([
+            f"- [{item.get('source', '')}] {item.get('title', '')}"
+            for item in news_items[:3]
+        ])
 
-    prompt = f"""Du bist ein professioneller Aktien-Analyst. Bewerte die folgenden News für {symbol}.
+        prompt = f"""Du bist ein professioneller Aktien-Analyst. Bewerte die folgenden News für {symbol}.
 
 NEWS:
 {news_text}
@@ -639,60 +645,60 @@ Scoring-Regeln:
 
 is_real_catalyst = true NUR bei: FDA-Zulassung, M&A, Earnings-Überraschung, klinischer Studienerfolg"""
 
-    # FIX V9.1: Retry mit Backoff 15s → 30s → 60s
-    max_retries = 3
-    for attempt in range(max_retries):
-        try:
-            gemini_limiter.record_call()
-            client = genai.Client(api_key=st.secrets["gemini"]["api_key"])
-            response = client.models.generate_content(
-                model='gemini-2.5-flash',
-                contents=prompt,
-            )
-            raw = response.text.strip().replace('```json', '').replace('```', '').strip()
-            data = json.loads(raw)
+        # Retry mit Backoff 15s → 30s → 60s
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                gemini_limiter.record_call()
+                client = genai.Client(api_key=st.secrets["gemini"]["api_key"])
+                response = client.models.generate_content(
+                    model='gemini-2.5-flash',
+                    contents=prompt,
+                )
+                raw = response.text.strip().replace('```json', '').replace('```', '').strip()
+                data = json.loads(raw)
 
-            result = GeminiNewsScore(
-                score=int(data.get('score', 0)),
-                catalyst_type=str(data.get('catalyst_type', 'NONE')),
-                reasoning=str(data.get('reasoning', '')),
-                is_real_catalyst=bool(data.get('is_real_catalyst', False)),
-                from_cache=False
-            )
+                result = GeminiNewsScore(
+                    score=int(data.get('score', 0)),
+                    catalyst_type=str(data.get('catalyst_type', 'NONE')),
+                    reasoning=str(data.get('reasoning', '')),
+                    is_real_catalyst=bool(data.get('is_real_catalyst', False)),
+                    from_cache=False
+                )
 
-            gemini_news_cache.set(cache_key, {
-                'score': result.score,
-                'catalyst_type': result.catalyst_type,
-                'reasoning': result.reasoning,
-                'is_real_catalyst': result.is_real_catalyst,
-                'from_cache': False
-            })
+                gemini_news_cache.set(cache_key, {
+                    'score': result.score,
+                    'catalyst_type': result.catalyst_type,
+                    'reasoning': result.reasoning,
+                    'is_real_catalyst': result.is_real_catalyst,
+                    'from_cache': False
+                })
 
-            stats = st.session_state.get('api_stats', {})
-            stats['gemini_news'] = stats.get('gemini_news', 0) + 1
-            st.session_state['api_stats'] = stats
-            return result
+                stats = st.session_state.get('api_stats', {})
+                stats['gemini_news'] = stats.get('gemini_news', 0) + 1
+                st.session_state['api_stats'] = stats
+                return result
 
-        except Exception as e:
-            err_str = str(e)
-            is_rate_limit = '429' in err_str or 'RESOURCE_EXHAUSTED' in err_str
-            if is_rate_limit and attempt < max_retries - 1:
-                wait_time = 15 * (2 ** attempt)  # 15s, 30s, 60s
-                logger.warning(f"Gemini 429 für {symbol} — warte {wait_time}s (Versuch {attempt+1})")
-                time.sleep(wait_time)
-                continue
-            logger.error(f"Gemini Fehler für {symbol}: {e}")
-            return GeminiNewsScore(
-                score=20, catalyst_type="ERROR",
-                reasoning="Gemini nicht verfügbar — technische Bewertung",
-                is_real_catalyst=False
-            )
+            except Exception as e:
+                err_str = str(e)
+                is_rate_limit = '429' in err_str or 'RESOURCE_EXHAUSTED' in err_str
+                if is_rate_limit and attempt < max_retries - 1:
+                    wait_time = 15 * (2 ** attempt)
+                    logger.warning(f"Gemini 429 für {symbol} — warte {wait_time}s (Versuch {attempt+1})")
+                    time.sleep(wait_time)
+                    continue
+                logger.error(f"Gemini Fehler für {symbol}: {e}")
+                return GeminiNewsScore(
+                    score=20, catalyst_type="ERROR",
+                    reasoning="Gemini nicht verfügbar",
+                    is_real_catalyst=False
+                )
 
-    return GeminiNewsScore(
-        score=20, catalyst_type="ERROR",
-        reasoning="Gemini max. Retries erreicht",
-        is_real_catalyst=False
-    )
+        return GeminiNewsScore(
+            score=20, catalyst_type="ERROR",
+            reasoning="Gemini max. Retries erreicht",
+            is_real_catalyst=False
+        )
 
 
 def get_gemini_entry_analysis(item_data: dict) -> str:
@@ -1617,7 +1623,7 @@ def main():
         <div style="background:#1a1a2e;padding:12px;border-radius:8px;border-left:4px solid #00FF00;margin:8px 0;">
             🟢 <b>Yahoo Finance</b> — {stats.get('yahoo', 0)} Calls<br>
             {'🟢' if finnhub_limiter.can_call() else '🔴'} <b>Finnhub</b> — {finnhub_limiter.get_status()}/60 pro Min<br>
-            🤖 <b>Gemini News</b> — {stats.get('gemini_news', 0)} Calls | {gemini_limiter.get_status()}/10 pro Min<br>
+            🤖 <b>Gemini News</b> — {stats.get('gemini_news', 0)} Calls | {gemini_limiter.get_status()}/5 pro Min<br>
             📦 Cache Hits: {stats.get('cache_hits', 0)}
         </div>""", unsafe_allow_html=True)
 
@@ -1704,12 +1710,13 @@ def main():
             scan_triggered = True
 
     if scan_triggered:
-        # FIX V9.1: 3s Pause vor Scan — Yahoo nach Marktkontext-Call erholen lassen
-        time.sleep(3)
         with st.spinner("🔍 Precision Scan läuft..."):
-            market_ctx = get_market_context()
-            if market_ctx.get('market_closed'):
-                st.warning("⚠️ Markt möglicherweise geschlossen — Daten können veraltet sein.")
+            # FIX V9.2: Marktkontext nur aus Cache lesen beim Scan-Start.
+            # get_market_context() macht einen Yahoo-Call der mit dem Scan kollidiert.
+            # Stattdessen: nur gecachten Wert verwenden, kein neuer Yahoo-Call.
+            market_ctx = market_context_cache.get("market_ctx", 7200) or {
+                'risk_off': False, 'spy_change': 0, 'vix_level': 20, 'market_closed': False
+            }
 
             universe, src = get_combined_universe()
             st.info(
