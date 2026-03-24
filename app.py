@@ -288,17 +288,31 @@ DEAD_TICKERS_FILE  = "dead_tickers.json"
 BASE_WATCHLIST = [
     # Mega-Cap Tech
     "AAPL", "MSFT", "NVDA", "GOOGL", "META", "AMZN", "TSLA", "AMD",
+
     # Semiconductors
     "AVGO", "QCOM", "MU", "AMAT", "LRCX", "KLAC", "MRVL", "ON", "TXN",
-    # Software / Cloud
-    "CRM", "NOW", "SNOW", "PLTR", "CRWD", "ZS", "PANW", "DDOG", "NET",
-    "FTNT", "OKTA", "HCP", "TTD", "ADSK", "ANSS", "CDNS",
+    "INTC", "ASML", "TSM", "ARM", "MPWR", "WOLF", "ONTO", "ENTG", "ACLS",
+
+    # AI / Cloud Infrastructure
+    "ORCL", "CRM", "NOW", "SNOW", "PLTR", "DDOG", "NET", "CFLT",
+    "MDB", "GTLB", "ESTC", "SMCI", "DELL", "HPE", "PSTG", "NTAP",
+
+    # Cybersecurity
+    "CRWD", "PANW", "ZS", "FTNT", "OKTA", "S", "CYBR", "TENB", "QLYS", "VRNS",
+
+    # Software / SaaS
+    "ADSK", "ANSS", "CDNS", "TTD", "HUBS", "BILL", "MNDY", "APPN",
+    "VEEV", "PCTY", "PAYC", "DOCU", "ZM", "RNG", "SMAR",
+
     # Fintech / Payments
-    "COIN", "HOOD", "SQ", "PYPL", "AFRM",
-    # Hardware / Infra
-    "DELL", "HPE", "SMCI", "NTAP", "PSTG",
-    # Biotech (Blue-Chip only)
+    "COIN", "HOOD", "AFRM", "SOFI", "SSNC", "FIS", "FISV", "GPN", "PYPL", "MA", "V",
+
+    # Hardware / Consumer Tech
+    "ROKU", "LOGI", "STX", "WDC",
+
+    # Biotech Blue-Chip (langsame Bewegungen, gute Setups)
     "LLY", "ABBV", "AMGN", "GILD", "VRTX", "REGN", "BIIB", "MRNA",
+    "BMY", "PFE", "ISRG", "DXCM", "IDXX", "ALGN",
 ]
 
 # ==============================================================================
