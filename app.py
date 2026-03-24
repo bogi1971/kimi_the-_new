@@ -509,12 +509,15 @@ def get_combined_universe(force_refresh: bool = False) -> Tuple[Set[str], str]:
     
     return combined, st.session_state.get('movers_source', 'fallback')
 
-def get_symbol_source(symbol: str) -> SourceType:
-    if symbol in st.session_state.get('catalyst_list', []):
+def get_symbol_source(symbol: str, session_state: Optional[Dict] = None) -> SourceType:
+    if session_state is None:
+        session_state = st.session_state
+    
+    if symbol in session_state.get('catalyst_list', []):
         return SourceType.CATALYST
-    if symbol in st.session_state.get('watchlist', []):
+    if symbol in session_state.get('watchlist', []):
         return SourceType.WATCHLIST
-    movers = st.session_state.get('top_movers_cache', {})
+    movers = session_state.get('top_movers_cache', {})
     if symbol in movers.get('gainers', []):
         return SourceType.GAINERS
     if symbol in movers.get('most_active', []):
