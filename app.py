@@ -21,8 +21,15 @@ import os
 import json
 import threading
 import numpy as np
-from google import genai
 from streamlit.runtime.scriptrunner import add_script_run_ctx, get_script_run_ctx
+
+# Für Gemini API
+try:
+    import google.generativeai as genai
+    GEMINI_AVAILABLE = True
+except ImportError:
+    GEMINI_AVAILABLE = False
+    genai = None
 
 warnings.filterwarnings('ignore')
 logging.basicConfig(level=logging.INFO)
@@ -135,16 +142,19 @@ REQUIRE_CANDLESTICK_CONFIRM = False
 
 CATALYST_FILE = "catalysts.json"
 
+# Secrets laden
 try:
     TELEGRAM_BOT_TOKEN = st.secrets["telegram"]["bot_token"]
     TELEGRAM_CHAT_ID = st.secrets["telegram"]["chat_id"]
     FINNHUB_KEYS = st.secrets["finnhub"]["keys"]
     ALPHA_VANTAGE_KEYS = st.secrets["alpha_vantage"]["keys"]
+    GEMINI_API_KEY = st.secrets["gemini"]["api_key"]
 except Exception as e:
     TELEGRAM_BOT_TOKEN = ""
     TELEGRAM_CHAT_ID = ""
     FINNHUB_KEYS = []
     ALPHA_VANTAGE_KEYS = []
+    GEMINI_API_KEY = ""
 
 BASE_WATCHLIST = [
     "NVDA", "TSLA", "AMD", "PLTR", "COIN", "MSTR", "HOOD", "CRWD", "AAPL", "MSFT", 
@@ -247,9 +257,7 @@ class RateLimiter:
     def can_call(self) -> bool:
         with self._lock:
             now = time.time()
-            # Alte Aufrufe entfernen
             self.calls = [c for c in self.calls if now - c < self.window]
-            # Erlaube Aufruf, wenn weniger als max_calls in der letzten window
             return len(self.calls) < self.max_calls
             
     def record_call(self) -> int:
@@ -262,6 +270,10 @@ class RateLimiter:
             now = time.time()
             self.calls = [c for c in self.calls if now - c < self.window]
             return f"{len(self.calls)}/{self.max_calls}"
+    
+    def reset(self):
+        with self._lock:
+            self.calls = []
 
 class AlphaVantageManager:
     def __init__(self, keys: List[str]):
@@ -322,8 +334,14 @@ class AlphaVantageManager:
             'exhausted': self.limiters[i]['exhausted'],
             'can_call': self.can_call(i)
         } for i, k in enumerate(self.keys)]
+    
+    def reset(self):
+        for i in self.limiters:
+            self.limiters[i]['exhausted'] = False
+            self.limiters[i]['calls_today'] = 0
+            self.limiters[i]['calls_per_min'] = []
 
-# Initialisiere RateLimiter mit korrekten Werten
+# Initialisiere RateLimiter
 finnhub_limiter = RateLimiter(60, 60)
 alpha_manager = AlphaVantageManager(ALPHA_VANTAGE_KEYS)
 
@@ -562,7 +580,6 @@ def get_finnhub_news_smart(symbol: str) -> Tuple[Optional[List[Dict]], bool]:
         if response:
             data = response.json()
             
-            # Nach erfolgreichem API-Call den Zähler erhöhen
             finnhub_limiter.record_call()
             
             stats = st.session_state.get('api_stats', {})
@@ -595,7 +612,6 @@ def get_finnhub_news_smart(symbol: str) -> Tuple[Optional[List[Dict]], bool]:
     return None, False
 
 def analyze_news_tiered(symbol: str, tier: int, score: int) -> Tuple[List[Dict], List[str], bool]:
-    # Nur für hochwertige Setups News laden (spart API-Calls)
     if tier <= 20 or score > 60:
         news, cached = get_finnhub_news_smart(symbol)
         if news:
@@ -978,45 +994,77 @@ def get_alpha_vantage_smart(symbol: str) -> Tuple[Optional[Dict], bool]:
 # ============================== Gemini AI Integration ==============================
 
 def get_gemini_entry_analysis(item_data: dict) -> str:
-    if "gemini" not in st.secrets or "api_key" not in st.secrets["gemini"]:
-        return "⚠️ Gemini API-Key fehlt in den Secrets. Bitte eintragen."
-        
-    client = genai.Client(api_key=st.secrets["gemini"]["api_key"])
+    # Prüfe ob Gemini API Key vorhanden ist
+    if not GEMINI_API_KEY:
+        return "⚠️ Gemini API-Key fehlt in den Secrets. Bitte in .streamlit/secrets.toml eintragen:\n\n```toml\n[gemini]\napi_key = \"dein-api-key\"\n```"
     
-    news_list = item_data.get('news', [])
-    news_title = news_list[0].get('title', 'Keine relevanten News') if news_list else 'Keine relevanten News'
-    
-    candle = item_data.get('candlestick')
-    candle_desc = candle.description if candle else 'Kein Signal'
-    candle_quality = candle.entry_quality if candle else 'weak'
-    
-    prompt = f"""
-    Du bist ein professioneller Daytrader. Analysiere folgendes Setup für einen kurzfristigen Long-Einstieg:
-    
-    Ticker: {item_data['symbol']}
-    Preis: ${item_data['price']:.2f}
-    Pullback: -{item_data['pullback_pct']*100:.1f}% vom Hoch
-    Geplanter Stop Loss: ${item_data['stop_loss']:.2f}
-    Geplantes Target: ${item_data['target']:.2f}
-    Rel. Volumen (RVol): {item_data['rvol']:.1f}x
-    Candlestick-Signal: {candle_desc}
-    Entry Quality: {candle_quality}
-    News Catalyst: {news_title}
-
-    Gib mir eine extrem präzise Einschätzung (max. 3 Sätze): 
-    1. Wie bewertest du das CRV (R:R) und die Volatilität?
-    2. Ist das Candlestick-Signal überzeugend für einen Einstieg heute?
-    3. Konkreter Entry-Trigger: Limit Order, Market Order oder warten?
-    """
+    if not GEMINI_AVAILABLE:
+        return "❌ Google Generative AI Bibliothek nicht installiert. Führe aus: pip install google-generativeai"
     
     try:
-        response = client.models.generate_content(
-            model='gemini-2.5-flash',
-            contents=prompt,
-        )
-        return response.text.strip()
+        # Konfiguriere den Client
+        genai.configure(api_key=GEMINI_API_KEY)
+        
+        # Wähle das Modell
+        model = genai.GenerativeModel('gemini-1.5-flash')
+        
+        # Bereite die Daten für den Prompt vor
+        news_list = item_data.get('news', [])
+        if news_list:
+            news_title = news_list[0].get('title', 'Keine relevanten News')
+        else:
+            news_title = 'Keine relevanten News'
+        
+        candle = item_data.get('candlestick')
+        if candle:
+            candle_desc = candle.description if hasattr(candle, 'description') else str(candle)
+            candle_quality = candle.entry_quality if hasattr(candle, 'entry_quality') else 'weak'
+            candle_strength = candle.strength if hasattr(candle, 'strength') else 0
+        else:
+            candle_desc = 'Kein Signal'
+            candle_quality = 'weak'
+            candle_strength = 0
+        
+        # Erstelle einen sauberen Prompt
+        prompt = f"""Du bist ein professioneller Daytrader. Analysiere folgendes Setup für einen kurzfristigen Long-Einstieg:
+
+Ticker: {item_data['symbol']}
+Preis: ${item_data['price']:.2f}
+Pullback: -{item_data['pullback_pct']*100:.1f}% vom Hoch
+Geplanter Stop Loss: ${item_data['stop_loss']:.2f}
+Geplantes Target: ${item_data['target']:.2f}
+Risk/Reward Ratio: {item_data['rr_ratio']:.1f}:1
+Relatives Volumen (RVol): {item_data['rvol']:.1f}x
+Candlestick-Signal: {candle_desc}
+Candlestick-Stärke: {candle_strength}/100
+Candlestick-Qualität: {candle_quality}
+News Catalyst: {news_title}
+
+Gib eine präzise Einschätzung in 3-4 Sätzen:
+1. Bewertung des Risk/Reward und der Volatilität
+2. Einschätzung des Candlestick-Signals
+3. Konkrete Empfehlung für den Einstieg (Limit Order, Market Order oder warten)"""
+        
+        # Rufe die API auf
+        response = model.generate_content(prompt)
+        
+        # Extrahiere den Text aus der Response
+        if response and hasattr(response, 'text') and response.text:
+            return response.text.strip()
+        else:
+            return "❌ Keine Antwort von der Gemini API erhalten."
+            
     except Exception as e:
-        return f"❌ Gemini API Fehler: {str(e)}"
+        error_msg = str(e)
+        # Spezifische Fehlermeldungen
+        if "API key" in error_msg:
+            return f"❌ Ungültiger Gemini API-Key. Bitte überprüfe die Secrets.\n\nFehler: {error_msg}"
+        elif "quota" in error_msg.lower():
+            return "⚠️ Gemini API-Quota erreicht. Bitte später erneut versuchen oder API-Key upgraden."
+        elif "model" in error_msg.lower():
+            return f"❌ Modell-Fehler: {error_msg}\n\nVersuche es mit einem anderen Modell."
+        else:
+            return f"❌ Gemini API Fehler: {error_msg}"
 
 # ============================== ThreadPool Scanner ==============================
 
@@ -1151,7 +1199,6 @@ class ThreadPoolBullScanner:
         
         hard_filter_active = st.session_state.get('hard_filter_active', False)
         
-        candlestick_penalty = 0
         if hard_filter_active and REQUIRE_CANDLESTICK_CONFIRM:
             if candlestick.strength < MIN_CANDLESTICK_STRENGTH:
                 debug_info['errors'].append(f"Candlestick zu schwach: {candlestick.strength}/100 (min: {MIN_CANDLESTICK_STRENGTH})")
@@ -1190,8 +1237,7 @@ class ThreadPoolBullScanner:
             if candlestick.confirmation:
                 score += 10
         else:
-             candlestick_penalty = 5
-             score -= candlestick_penalty
+             score -= 5
         
         news, sources, cached_news = analyze_news_tiered(symbol, tier, score)
         if news:
@@ -1543,12 +1589,11 @@ def main():
         st.session_state['auto_refresh'] = auto_pilot
         st.divider()
 
-        # --- NEU: Catalyst Manager ---
+        # Catalyst Manager
         st.header("🧬 Catalyst Manager")
         with st.expander("Pharma/Biotech Liste verwalten", expanded=False):
             st.write("Verwalte hier Aktien, die in Kürze Studienergebnisse erwarten.")
             
-            # 1. Hinzufügen
             new_ticker = st.text_input("Ticker hinzufügen:").strip().upper()
             if st.button("➕ Speichern"):
                 if new_ticker and new_ticker not in st.session_state['catalyst_list']:
@@ -1561,7 +1606,6 @@ def main():
             
             st.divider()
             
-            # 2. Entfernen / Anzeigen
             if st.session_state['catalyst_list']:
                 st.write("**Aktuelle Catalyst-Liste:**")
                 st.write(", ".join(st.session_state['catalyst_list']))
@@ -1582,7 +1626,7 @@ def main():
         
         hard_filter = st.toggle("🔥 Hard Mode (Nur Candlestick)", 
                                 value=st.session_state.get('hard_filter_active', False),
-                                help="Nur Setups mit starken Candlestick-Signalen (60+ Punkte)")
+                                help="Nur Setups mit starken Candlestick-Signalen (40+ Punkte)")
         st.session_state['hard_filter_active'] = hard_filter
         
         if hard_filter:
@@ -1761,7 +1805,6 @@ def main():
                         
                         st.write(f"**Reasons:** {' | '.join(result['reasons'])}")
                         
-                        # Zeige News falls vorhanden
                         if result.get('news'):
                             st.write("**📰 News:**")
                             for n in result['news'][:2]:
@@ -1805,14 +1848,8 @@ def main():
             combined_watchlist = sorted(list(set(BASE_WATCHLIST + st.session_state.get('catalyst_list', []))))
             st.session_state['combined_universe'] = set(combined_watchlist + [s for sublist in FALLBACK_MOVERS.values() for s in sublist])
             
-            # Alpha Vantage Limits zurücksetzen
-            for i in alpha_manager.limiters:
-                alpha_manager.limiters[i]['exhausted'] = False
-                alpha_manager.limiters[i]['calls_today'] = 0
-                alpha_manager.limiters[i]['calls_per_min'] = []
-            
-            # Finnhub RateLimiter zurücksetzen
-            finnhub_limiter.calls = []
+            alpha_manager.reset()
+            finnhub_limiter.reset()
             
             st.success("Alle Statistiken und Limits zurückgesetzt!")
             st.rerun()
