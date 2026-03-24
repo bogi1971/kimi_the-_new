@@ -1,5 +1,5 @@
 """
-Elite Bull Scanner Pro V8.3 - BALANCED Edition (PRE-MARKET & UI CATALYST MANAGER)
+Elite Bull Scanner Pro V8.3 - BALANCED Edition (OPTIMIZED)
 """
 
 import streamlit as st
@@ -156,18 +156,18 @@ except Exception as e:
     ALPHA_VANTAGE_KEYS = []
     GEMINI_API_KEY = ""
 
+# Bereinigte Watchlist (ohne delisted Stocks)
 BASE_WATCHLIST = [
     "NVDA", "TSLA", "AMD", "PLTR", "COIN", "MSTR", "HOOD", "CRWD", "AAPL", "MSFT", 
     "AMZN", "MARA", "SAP", "LLY", "ABBV", "JNJ", "PFE", "MRK", "BMY", "GILD", "AMGN", 
-    "BIIB", "VRTX", "REGN", "MRNA", "BNTX", "GSK", "AZN", "SNY", "JAZZ", "ALNY", "IONS", 
-    "NTLA", "EDIT", "CRSP", "BEAM", "VNDA", "SAVA", "GERN", "FATE", "IOVA", "SRPT", 
-    "RCKT", "APLS", "HALO", "AQST", "IBRX", "ASND", "DNLI", "ALDX", "LNTH", "REPL", 
-    "CING", "ACHV", "ATRA", "TBPH", "ROG", "ETON", "BMRN", "CRVS", "NVAX", "UUUU", 
-    "CELC", "RAPT", "ACRS"
+    "BIIB", "VRTX", "REGN", "MRNA", "BNTX", "GSK", "AZN", "SNY", "ALNY", "IONS", 
+    "NTLA", "EDIT", "CRSP", "BEAM", "SAVA", "GERN", "FATE", "IOVA", "SRPT", 
+    "RCKT", "APLS", "HALO", "IBRX", "ASND", "DNLI", "ALDX", "LNTH", "REPL", 
+    "ATRA", "TBPH", "ROG", "ETON", "BMRN", "CRVS", "NVAX", "UUUU"
 ]
 
 FALLBACK_MOVERS = {
-    'gainers': ["MARA", "RIOT", "HUT", "COIN", "HOOD", "MSTR", "NVDA", "AMD", "PLTR", "TSLA"],
+    'gainers': ["MARA", "RIOT", "COIN", "HOOD", "MSTR", "NVDA", "AMD", "PLTR", "TSLA", "CRWD"],
     'most_active': ["TSLA", "NVDA", "AMD", "PLTR", "COIN", "MSTR", "HOOD", "AAPL", "MSFT", "AMZN"]
 }
 
@@ -214,6 +214,7 @@ def init_session_state():
         'combined_universe': set(combined_watchlist + [s for sublist in FALLBACK_MOVERS.values() for s in sublist]),
         'movers_source': 'fallback',
         'hard_filter_active': False,
+        'failed_symbols': set(),  # Track failed symbols to skip
     }
     for k, v in defaults.items():
         if k not in st.session_state:
@@ -253,12 +254,16 @@ class RateLimiter:
         self.window = window_seconds
         self.calls = []
         self._lock = threading.Lock()
+        self.wait_time = 0
         
     def can_call(self) -> bool:
         with self._lock:
             now = time.time()
             self.calls = [c for c in self.calls if now - c < self.window]
-            return len(self.calls) < self.max_calls
+            can = len(self.calls) < self.max_calls
+            if not can:
+                self.wait_time = self.window - (now - self.calls[0]) if self.calls else 0
+            return can
             
     def record_call(self) -> int:
         with self._lock:
@@ -274,6 +279,7 @@ class RateLimiter:
     def reset(self):
         with self._lock:
             self.calls = []
+            self.wait_time = 0
 
 class AlphaVantageManager:
     def __init__(self, keys: List[str]):
@@ -341,8 +347,9 @@ class AlphaVantageManager:
             self.limiters[i]['calls_today'] = 0
             self.limiters[i]['calls_per_min'] = []
 
-# Initialisiere RateLimiter
-finnhub_limiter = RateLimiter(60, 60)
+# Initialisiere RateLimiter mit längeren Windows
+finnhub_limiter = RateLimiter(30, 60)  # 30 calls per minute (reduziert)
+yahoo_limiter = RateLimiter(10, 10)    # 10 calls per 10 seconds
 alpha_manager = AlphaVantageManager(ALPHA_VANTAGE_KEYS)
 
 # ============================== Helper Functions ==============================
@@ -353,7 +360,10 @@ def safe_requests_get(url: str, params: Optional[Dict] = None, headers: Optional
         response.raise_for_status()
         return response
     except requests.RequestException as e:
-        logger.error(f"API-Request Fehler: {e}")
+        if "429" in str(e):
+            logger.warning(f"Rate Limit bei {url}")
+        else:
+            logger.error(f"API-Request Fehler: {e}")
         return None
 
 def get_market_clock() -> Dict[str, Any]:
@@ -415,7 +425,11 @@ def get_market_context() -> Dict[str, Any]:
         return cached
     
     try:
-        time.sleep(1)
+        # Warte, um Rate Limits zu vermeiden
+        if not yahoo_limiter.can_call():
+            time.sleep(2)
+        
+        yahoo_limiter.record_call()
         spy = yf.Ticker("SPY")
         spy_data = spy.history(period="5d")
         
@@ -429,7 +443,7 @@ def get_market_context() -> Dict[str, Any]:
         vix_level = 20
         if abs(spy_change) > 0.01:
             try:
-                time.sleep(0.5)
+                time.sleep(1)
                 vix = yf.Ticker("^VIX")
                 vix_data = vix.history(period="2d")
                 vix_level = vix_data['Close'].iloc[-1] if not vix_data.empty else 20
@@ -474,7 +488,7 @@ def fetch_yahoo_movers() -> Tuple[Dict[str, List[str]], str]:
     
     for category, url in urls.items():
         try:
-            time.sleep(2)
+            time.sleep(3)  # Längere Pause zwischen Requests
             response = requests.get(url, headers=headers, timeout=15)
             if response.status_code == 200:
                 try:
@@ -483,7 +497,8 @@ def fetch_yahoo_movers() -> Tuple[Dict[str, List[str]], str]:
                         df = tables[0]
                         if 'Symbol' in df.columns:
                             symbols = df['Symbol'].head(15).tolist()
-                            symbols = [s for s in symbols if isinstance(s, str) and len(s) <= 5 and s.isalpha()]
+                            # Filtere ungültige Symbole
+                            symbols = [s for s in symbols if isinstance(s, str) and len(s) <= 5 and s.isalpha() and s not in st.session_state.get('failed_symbols', set())]
                             movers[category] = symbols[:10]
                             success_count += 1
                             logger.info(f"{category}: {len(symbols)} Symbole geladen")
@@ -518,6 +533,9 @@ def get_combined_universe(force_refresh: bool = False) -> Tuple[Set[str], str]:
         for category, symbols in movers.items():
             combined.update(symbols)
         
+        # Entferne bekannte fehlgeschlagene Symbole
+        combined = combined - st.session_state.get('failed_symbols', set())
+        
         st.session_state['combined_universe'] = combined
         logger.info(f"Universum aktualisiert: {len(combined)} Symbole (Source: {source})")
         return combined, source
@@ -526,6 +544,8 @@ def get_combined_universe(force_refresh: bool = False) -> Tuple[Set[str], str]:
     combined.update(st.session_state.get('catalyst_list', []))
     for category, symbols in st.session_state.get('top_movers_cache', {}).items():
         combined.update(symbols)
+    
+    combined = combined - st.session_state.get('failed_symbols', set())
     
     return combined, st.session_state.get('movers_source', 'fallback')
 
@@ -554,18 +574,23 @@ def get_finnhub_news_smart(symbol: str) -> Tuple[Optional[List[Dict]], bool]:
         return cached, True
     
     if not FINNHUB_KEYS:
-        logger.warning(f"Keine Finnhub API Keys für {symbol} konfiguriert")
         return None, False
+    
+    # Warte, wenn Rate Limit erreicht
+    if not finnhub_limiter.can_call():
+        wait_time = min(finnhub_limiter.wait_time, 5)
+        if wait_time > 0:
+            time.sleep(wait_time)
+        if not finnhub_limiter.can_call():
+            return None, False
     
     # Finde einen verfügbaren Key
     current_finnhub_key = None
     for key in FINNHUB_KEYS:
-        if finnhub_limiter.can_call():
-            current_finnhub_key = key
-            break
+        current_finnhub_key = key
+        break
     
     if not current_finnhub_key:
-        logger.warning(f"Finnhub Rate Limit erreicht für {symbol}")
         return None, False
     
     try:
@@ -601,17 +626,17 @@ def get_finnhub_news_smart(symbol: str) -> Tuple[Optional[List[Dict]], bool]:
                 news_cache.set(cache_key, formatted_news)
                 logger.info(f"{len(formatted_news)} News für {symbol} geladen")
                 return formatted_news, False
-            else:
-                logger.debug(f"Keine News für {symbol} gefunden")
         else:
-            logger.error(f"Finnhub API Fehler für {symbol}: Keine Response")
+            # Bei 429 nicht loggen, nur zurückgeben
+            return None, False
             
     except Exception as e:
-        logger.error(f"Finnhub Fehler für {symbol}: {e}")
+        logger.debug(f"Finnhub Fehler für {symbol}: {e}")
     
     return None, False
 
 def analyze_news_tiered(symbol: str, tier: int, score: int) -> Tuple[List[Dict], List[str], bool]:
+    # Nur für hochwertige Setups News laden
     if tier <= 20 or score > 60:
         news, cached = get_finnhub_news_smart(symbol)
         if news:
@@ -994,21 +1019,16 @@ def get_alpha_vantage_smart(symbol: str) -> Tuple[Optional[Dict], bool]:
 # ============================== Gemini AI Integration ==============================
 
 def get_gemini_entry_analysis(item_data: dict) -> str:
-    # Prüfe ob Gemini API Key vorhanden ist
     if not GEMINI_API_KEY:
-        return "⚠️ Gemini API-Key fehlt in den Secrets. Bitte in .streamlit/secrets.toml eintragen:\n\n```toml\n[gemini]\napi_key = \"dein-api-key\"\n```"
+        return "⚠️ Gemini API-Key fehlt in den Secrets."
     
     if not GEMINI_AVAILABLE:
-        return "❌ Google Generative AI Bibliothek nicht installiert. Führe aus: pip install google-generativeai"
+        return "❌ Google Generative AI Bibliothek nicht installiert."
     
     try:
-        # Konfiguriere den Client
         genai.configure(api_key=GEMINI_API_KEY)
-        
-        # Wähle das Modell
         model = genai.GenerativeModel('gemini-1.5-flash')
         
-        # Bereite die Daten für den Prompt vor
         news_list = item_data.get('news', [])
         if news_list:
             news_title = news_list[0].get('title', 'Keine relevanten News')
@@ -1025,51 +1045,38 @@ def get_gemini_entry_analysis(item_data: dict) -> str:
             candle_quality = 'weak'
             candle_strength = 0
         
-        # Erstelle einen sauberen Prompt
-        prompt = f"""Du bist ein professioneller Daytrader. Analysiere folgendes Setup für einen kurzfristigen Long-Einstieg:
+        prompt = f"""Du bist ein professioneller Daytrader. Analysiere folgendes Setup:
 
 Ticker: {item_data['symbol']}
 Preis: ${item_data['price']:.2f}
-Pullback: -{item_data['pullback_pct']*100:.1f}% vom Hoch
-Geplanter Stop Loss: ${item_data['stop_loss']:.2f}
-Geplantes Target: ${item_data['target']:.2f}
-Risk/Reward Ratio: {item_data['rr_ratio']:.1f}:1
-Relatives Volumen (RVol): {item_data['rvol']:.1f}x
-Candlestick-Signal: {candle_desc}
-Candlestick-Stärke: {candle_strength}/100
-Candlestick-Qualität: {candle_quality}
-News Catalyst: {news_title}
+Pullback: -{item_data['pullback_pct']*100:.1f}%
+Stop Loss: ${item_data['stop_loss']:.2f}
+Target: ${item_data['target']:.2f}
+Risk/Reward: {item_data['rr_ratio']:.1f}:1
+RVol: {item_data['rvol']:.1f}x
+Candlestick: {candle_desc} ({candle_strength}/100)
+Qualität: {candle_quality}
+News: {news_title}
 
-Gib eine präzise Einschätzung in 3-4 Sätzen:
-1. Bewertung des Risk/Reward und der Volatilität
-2. Einschätzung des Candlestick-Signals
-3. Konkrete Empfehlung für den Einstieg (Limit Order, Market Order oder warten)"""
+Gib eine kurze Einschätzung (3 Sätze):
+1. Risk/Reward Bewertung
+2. Candlestick-Bewertung
+3. Entry-Empfehlung"""
         
-        # Rufe die API auf
         response = model.generate_content(prompt)
         
-        # Extrahiere den Text aus der Response
         if response and hasattr(response, 'text') and response.text:
             return response.text.strip()
         else:
-            return "❌ Keine Antwort von der Gemini API erhalten."
+            return "❌ Keine Antwort erhalten."
             
     except Exception as e:
-        error_msg = str(e)
-        # Spezifische Fehlermeldungen
-        if "API key" in error_msg:
-            return f"❌ Ungültiger Gemini API-Key. Bitte überprüfe die Secrets.\n\nFehler: {error_msg}"
-        elif "quota" in error_msg.lower():
-            return "⚠️ Gemini API-Quota erreicht. Bitte später erneut versuchen oder API-Key upgraden."
-        elif "model" in error_msg.lower():
-            return f"❌ Modell-Fehler: {error_msg}\n\nVersuche es mit einem anderen Modell."
-        else:
-            return f"❌ Gemini API Fehler: {error_msg}"
+        return f"❌ Fehler: {str(e)[:100]}"
 
 # ============================== ThreadPool Scanner ==============================
 
 class ThreadPoolBullScanner:
-    def __init__(self, max_workers: int = 4, min_delay: float = 1.0):
+    def __init__(self, max_workers: int = 3, min_delay: float = 1.5):
         self.max_workers = max_workers
         self.min_delay = min_delay
         self._yahoo_lock = threading.Lock()
@@ -1077,10 +1084,14 @@ class ThreadPoolBullScanner:
         self._yahoo_cache = SmartCache()
         
     def _fetch_yahoo_with_rate_limit(self, symbol: str) -> Optional[pd.DataFrame]:
+        # Überspringe bekannte fehlgeschlagene Symbole
+        if symbol in st.session_state.get('failed_symbols', set()):
+            return None
+            
         cache_key = f"yh_{symbol}"
         cached = self._yahoo_cache.get(cache_key, 300)
         if cached is not None:
-             return cached
+            return cached
         
         with self._yahoo_lock:
             now = time.time()
@@ -1089,53 +1100,56 @@ class ThreadPoolBullScanner:
                 time.sleep(self.min_delay - time_since_last)
             self._last_yahoo_call = time.time()
         
-        max_retries = 3
+        max_retries = 2
         for attempt in range(max_retries):
             try:
                 ticker = yf.Ticker(symbol)
-                df = ticker.history(period='3mo', interval='1d')
+                df = ticker.history(period='2mo', interval='1d')  # Kürzerer Zeitraum
+                
+                if df.empty or len(df) < 10:
+                    # Symbol als fehlgeschlagen markieren
+                    st.session_state['failed_symbols'].add(symbol)
+                    return None
                 
                 try:
                     current_pm_price = ticker.fast_info.last_price
                     if current_pm_price and current_pm_price > 0:
                         df.iloc[-1, df.columns.get_loc('Close')] = current_pm_price
-                        df.iloc[-1, df.columns.get_loc('High')] = max(float(df.iloc[-1]['High']), current_pm_price)
-                        df.iloc[-1, df.columns.get_loc('Low')] = min(float(df.iloc[-1]['Low']), current_pm_price)
-                except Exception as pm_e:
-                    logger.debug(f"Pre-Market Preis für {symbol} konnte nicht geladen werden: {pm_e}")
+                except:
+                    pass
                 
-                if not df.empty:
-                    stats = st.session_state.get('api_stats', {})
-                    stats['yahoo'] = stats.get('yahoo', 0) + 1
-                    st.session_state['api_stats'] = stats
-                    
-                    self._yahoo_cache.set(cache_key, df)
-                    return df
-                break
+                stats = st.session_state.get('api_stats', {})
+                stats['yahoo'] = stats.get('yahoo', 0) + 1
+                st.session_state['api_stats'] = stats
+                
+                self._yahoo_cache.set(cache_key, df)
+                return df
                 
             except Exception as e:
                 if attempt < max_retries - 1:
-                    sleep_time = 2 ** attempt
-                    time.sleep(sleep_time)
+                    time.sleep(2)
                 else:
-                    logger.error(f"Yahoo Fehler für {symbol}: {e}")
+                    # Symbol als fehlgeschlagen markieren
+                    st.session_state['failed_symbols'].add(symbol)
+                    logger.debug(f"Yahoo Fehler für {symbol}: {e}")
             
         return None
     
     def analyze_single_symbol(self, symbol: str, tier: int, total: int) -> Optional[Dict[str, Any]]:
         debug_info = {'symbol': symbol, 'tier': tier, 'errors': [], 'checks': {}}
         
+        # Längere Pausen für tiefere Tiers
         if tier > 30:
-            time.sleep(0.5)
+            time.sleep(1)
         if tier > 60:
-            time.sleep(1.0)
+            time.sleep(2)
         
         df = self._fetch_yahoo_with_rate_limit(symbol)
         if df is None or df.empty:
             debug_info['errors'].append("Yahoo Fehler / Empty Data")
             _log_scan_debug(debug_info)
             return None
-        if len(df) < 15:
+        if len(df) < 10:
             debug_info['errors'].append(f"Zu wenig Daten: {len(df)}")
             _log_scan_debug(debug_info)
             return None
@@ -1162,13 +1176,12 @@ class ThreadPoolBullScanner:
         
         pullback_pct = (recent_high - current_price) / recent_high
         if pullback_pct < MIN_PULLBACK_PERCENT or pullback_pct > MAX_PULLBACK_PERCENT:
-            debug_info['errors'].append(f"Pullback {pullback_pct:.2%} außerhalb Grenzen ({MIN_PULLBACK_PERCENT:.0%}-{MAX_PULLBACK_PERCENT:.0%})")
+            debug_info['errors'].append(f"Pullback {pullback_pct:.2%} außerhalb")
             _log_scan_debug(debug_info)
             return None
         
         structure = analyze_structure(df_clean, symbol)
         debug_info['checks']['structure'] = structure.get('structure_intact', False)
-        debug_info['checks']['higher_lows'] = structure.get('higher_lows', False)
         
         has_bullish_structure = (
             structure.get('structure_intact', False) or 
@@ -1177,7 +1190,7 @@ class ThreadPoolBullScanner:
         )
         
         if not has_bullish_structure:
-            debug_info['errors'].append("Kein bullischer Trend (weder HH noch HL)")
+            debug_info['errors'].append("Kein bullischer Trend")
             _log_scan_debug(debug_info)
             return None
         
@@ -1193,15 +1206,12 @@ class ThreadPoolBullScanner:
              return None
         
         candlestick = analyze_candlestick(df_clean, last_swing_low, recent_high)
-        debug_info['checks']['candlestick_pattern'] = candlestick.pattern.value
-        debug_info['checks']['candlestick_strength'] = candlestick.strength
-        debug_info['checks']['candlestick_quality'] = candlestick.entry_quality
         
         hard_filter_active = st.session_state.get('hard_filter_active', False)
         
         if hard_filter_active and REQUIRE_CANDLESTICK_CONFIRM:
             if candlestick.strength < MIN_CANDLESTICK_STRENGTH:
-                debug_info['errors'].append(f"Candlestick zu schwach: {candlestick.strength}/100 (min: {MIN_CANDLESTICK_STRENGTH})")
+                debug_info['errors'].append(f"Candlestick zu schwach: {candlestick.strength}/100")
                 _log_scan_debug(debug_info)
                 return None
         
@@ -1213,10 +1223,6 @@ class ThreadPoolBullScanner:
             score += 12
         elif structure.get('higher_highs', False):
             score += 8
-        
-        trend_slope = structure.get('trend_slope', 0)
-        if trend_slope is not None and np.isfinite(trend_slope) and trend_slope > 0.005:
-            score += 5
         
         avg_vol = df_clean['Volume'].mean()
         current_vol = df_clean['Volume'].iloc[-1]
@@ -1236,25 +1242,13 @@ class ThreadPoolBullScanner:
             score += candlestick.strength // 4
             if candlestick.confirmation:
                 score += 10
-        else:
-             score -= 5
         
-        news, sources, cached_news = analyze_news_tiered(symbol, tier, score)
-        if news:
-            score += news[0]['score']
-        
-        fundamentals, fund_cached = None, False
-        if score > 50 and tier <= 10:
-            fundamentals, fund_cached = get_alpha_vantage_smart(symbol)
-        
-        pe_ratio = None
-        if fundamentals:
-            pe_ratio = fundamentals.get('pe_ratio')
-            if pe_ratio is not None and np.isfinite(pe_ratio):
-                if pe_ratio < 15:
-                    score += 8
-                elif pe_ratio > 100:
-                    score -= 5
+        # News nur bei hohem Score laden (spart API-Calls)
+        news, sources, cached_news = [], [], False
+        if score > 65:
+            news, sources, cached_news = analyze_news_tiered(symbol, tier, score)
+            if news:
+                score += news[0]['score']
         
         try:
             atr = float((df_clean['High'].rolling(14).max() - df_clean['Low'].rolling(14).min()).mean())
@@ -1272,13 +1266,13 @@ class ThreadPoolBullScanner:
         
         rr_ratio = (target - current_price) / (current_price - stop_loss) if (current_price - stop_loss) > 0 else 0
         if rr_ratio < 0.8:
-             debug_info['errors'].append(f"R:R {rr_ratio:.2f} zu niedrig (min: 0.8)")
+             debug_info['errors'].append(f"R:R {rr_ratio:.2f} zu niedrig")
              _log_scan_debug(debug_info)
              return None
         
         effective_threshold = MIN_SCORE_THRESHOLD
         if score < effective_threshold:
-            debug_info['errors'].append(f"Score {score} < {effective_threshold} (Threshold)")
+            debug_info['errors'].append(f"Score {score} < {effective_threshold}")
             _log_scan_debug(debug_info)
             return None
         
@@ -1287,8 +1281,6 @@ class ThreadPoolBullScanner:
             reasons.append("📈 Trend stark")
         elif structure.get('higher_lows', False):
             reasons.append("📈 HL ok")
-        elif structure.get('higher_highs', False):
-            reasons.append("📈 HH ok")
         
         if rvol > 1.0:
             reasons.append(f"⚡ Vol {rvol:.1f}x")
@@ -1297,15 +1289,11 @@ class ThreadPoolBullScanner:
         
         if candlestick.strength >= MIN_CANDLESTICK_STRENGTH:
             reasons.append(f"🕯️ {candlestick.pattern.value}")
-            if candlestick.confirmation:
-                 reasons.append("✅ Confirm")
         else:
             reasons.append("⚠️ Kein Candlestick")
         
         if news:
             reasons.append(f"📰 {news[0]['source']}")
-        if pe_ratio is not None:
-            reasons.append(f"{'💰' if pe_ratio<15 else '📊'} PE {pe_ratio:.1f}")
         
         source = get_symbol_source(symbol)
         
@@ -1322,9 +1310,9 @@ class ThreadPoolBullScanner:
             'rvol': rvol,
             'reasons': reasons,
             'news': news,
-            'pe_ratio': pe_ratio,
-            'api_sources': list(set([s for s in sources] + (['AV'] if fundamentals else []))),
-            'from_cache': cached_news or fund_cached,
+            'pe_ratio': None,
+            'api_sources': list(set(sources)),
+            'from_cache': cached_news,
             'source': source,
             'candlestick': candlestick,
             'has_candlestick_confirm': candlestick.strength >= MIN_CANDLESTICK_STRENGTH,
@@ -1362,10 +1350,6 @@ class ThreadPoolBullScanner:
                         results.append(result)
                         success_count += 1
                     else:
-                        debug = st.session_state.get('scan_debug', [])
-                        if debug and debug[-1].get('errors'):
-                            if 'Candlestick' in str(debug[-1]['errors']):
-                                candlestick_filtered += 1
                         error_count += 1
                 except Exception as e:
                     logger.error(f"Fehler bei {symbol}: {e}")
@@ -1540,14 +1524,6 @@ def render_card(item: Dict, container):
 def main():
     clock = get_market_clock()
 
-    if clock.get('is_holiday'):
-        st.markdown("""
-        <div style="background: linear-gradient(90deg, #ff4b4b, #ff6b6b); color: white; padding: 20px; border-radius: 10px; text-align: center; font-size: 1.2rem; margin: 20px 0; border: 2px solid #ff3333;">
-            🎌 US MARKET HOLIDAY 🎌<br>
-            <small>Markt ist geschlossen. Daten können unvollständig sein.</small>
-        </div>
-        """, unsafe_allow_html=True)
-
     st.markdown(f"""
     <div style="background: linear-gradient(135deg, #1a1a2e 0%, #0f0f23 100%); padding: 20px; border-radius: 15px; text-align: center; margin: 20px 0; border: 1px solid #333;">
         <div style="font-size: 2.5rem; font-weight: bold; color: #00FF00; font-family: 'Courier New', monospace;">{clock['time']}</div>
@@ -1555,28 +1531,12 @@ def main():
             <span style="padding: 8px 20px; border-radius: 20px; font-weight: bold; color: white; display: inline-block; background: {clock['color']};">{clock['status']}</span>
         </div>
         <div style="font-size: 1.2rem; color: #FFD700; margin: 10px 0;">{clock['countdown']}</div>
-        {f'<div style="width: 100%; height: 6px; background: #333; border-radius: 3px; overflow: hidden; margin-top: 10px;"><div style="height: 100%; background: linear-gradient(90deg, #00FF00, #FFD700); transition: width 1s ease; width: {clock["progress"]*100}%;"></div></div>' if clock['is_open'] else ''}
     </div>
     """, unsafe_allow_html=True)
 
     if st.session_state.get('auto_refresh'):
         last = st.session_state.get('last_auto_refresh', 0)
-        last_movers = st.session_state.get('last_movers_check', 0)
         now = time.time()
-        
-        if now - last_movers >= AUTO_REFRESH_INTERVAL:
-            st.session_state['last_movers_check'] = now
-            try:
-                movers, source = fetch_yahoo_movers()
-                st.session_state['top_movers_cache'] = movers
-                st.session_state['movers_source'] = source
-                combined = set(st.session_state['watchlist'])
-                combined.update(st.session_state.get('catalyst_list', []))
-                for category, symbols in movers.items():
-                    combined.update(symbols)
-                st.session_state['combined_universe'] = combined
-            except Exception as e:
-                logger.error(f"Fehler beim Movers-Update: {e}")
         
         if now - last >= AUTO_REFRESH_INTERVAL:
             st.session_state['last_auto_refresh'] = now
@@ -1585,15 +1545,12 @@ def main():
 
     with st.sidebar:
         st.header("🤖 Autopilot (24/7)")
-        auto_pilot = st.toggle("Autopilot aktivieren", value=st.session_state.get('auto_refresh', False), help="Scannt automatisch alle 30 Minuten")
+        auto_pilot = st.toggle("Autopilot aktivieren", value=st.session_state.get('auto_refresh', False))
         st.session_state['auto_refresh'] = auto_pilot
         st.divider()
 
-        # Catalyst Manager
         st.header("🧬 Catalyst Manager")
-        with st.expander("Pharma/Biotech Liste verwalten", expanded=False):
-            st.write("Verwalte hier Aktien, die in Kürze Studienergebnisse erwarten.")
-            
+        with st.expander("Catalyst Liste verwalten", expanded=False):
             new_ticker = st.text_input("Ticker hinzufügen:").strip().upper()
             if st.button("➕ Speichern"):
                 if new_ticker and new_ticker not in st.session_state['catalyst_list']:
@@ -1601,44 +1558,31 @@ def main():
                     save_catalysts(st.session_state['catalyst_list'])
                     st.success(f"{new_ticker} wurde hinzugefügt!")
                     st.rerun()
-                elif new_ticker in st.session_state['catalyst_list']:
-                    st.warning("Ticker existiert bereits.")
-            
-            st.divider()
             
             if st.session_state['catalyst_list']:
-                st.write("**Aktuelle Catalyst-Liste:**")
+                st.write("**Aktuelle Liste:**")
                 st.write(", ".join(st.session_state['catalyst_list']))
                 
-                to_remove = st.multiselect("Ticker entfernen:", st.session_state['catalyst_list'])
-                if st.button("🗑️ Ausgewählte löschen"):
+                to_remove = st.multiselect("Entfernen:", st.session_state['catalyst_list'])
+                if st.button("🗑️ Löschen"):
                     for t in to_remove:
                         st.session_state['catalyst_list'].remove(t)
                     save_catalysts(st.session_state['catalyst_list'])
-                    st.success("Erfolgreich gelöscht!")
+                    st.success("Gelöscht!")
                     st.rerun()
-            else:
-                st.info("Die Liste ist momentan leer.")
         
         st.divider()
 
         st.header("🎛️ Filter Einstellungen")
         
         hard_filter = st.toggle("🔥 Hard Mode (Nur Candlestick)", 
-                                value=st.session_state.get('hard_filter_active', False),
-                                help="Nur Setups mit starken Candlestick-Signalen (40+ Punkte)")
+                                value=st.session_state.get('hard_filter_active', False))
         st.session_state['hard_filter_active'] = hard_filter
         
         if hard_filter:
-            st.markdown("""
-            <div style="background: linear-gradient(90deg, #00FF00, #00aa00); color: black; padding: 10px; border-radius: 5px; font-weight: bold; margin: 10px 0;">
-                🔥 HARD MODE AKTIV<br>
-                <small>Min. Candlestick: 40/100<br>
-                Nur excellent/good Quality</small>
-            </div>
-            """, unsafe_allow_html=True)
+            st.info("🔥 Hard Mode: Nur Setups mit starken Candlestick-Signalen")
         else:
-            st.info("✅ Balanced Mode: Candlestick als Bonus, nicht Pflicht")
+            st.info("✅ Balanced Mode: Candlestick als Bonus")
         
         with st.expander("⚙️ Filter feinjustieren"):
             global MIN_PULLBACK_PERCENT, MAX_PULLBACK_PERCENT, MIN_SCORE_THRESHOLD
@@ -1650,269 +1594,89 @@ def main():
                 MIN_PULLBACK_PERCENT = min_pull
                 MAX_PULLBACK_PERCENT = max_pull
                 MIN_SCORE_THRESHOLD = min_score
-                st.success(f"Filter aktualisiert: {min_pull:.0%}-{max_pull:.0%}, Score {min_score}+")
+                st.success(f"Filter aktualisiert!")
         
         st.divider()
         
         st.header("📡 API Status")
-        stats = st.session_state.get('api_stats', {'yahoo':0,'finnhub':0,'alpha_vantage':0,'cache_hits':0,'alpha_rotation_count':0})
+        stats = st.session_state.get('api_stats', {})
         
-        yahoo_calls = stats.get('yahoo', 0)
-        st.markdown(f"""
-        <div style="background: #1a1a2e; padding: 15px; border-radius: 8px; border-left: 4px solid #00FF00; margin: 10px 0;">
-        🟢 <b>Yahoo Finance</b><br>
-        Kursdaten: {yahoo_calls} Calls<br>
-        <small>Unbegrenzt kostenlos</small>
-        </div>
-        """, unsafe_allow_html=True)
-        
-        fh_status = "🟢" if finnhub_limiter.can_call() else "🔴"
         st.markdown(f"""
         <div class="api-stat">
-            <div style="display:flex; justify-content:space-between;">
-                <span>Finnhub News</span>
-                <span>{fh_status} {finnhub_limiter.get_status()}/60 pro Minute</span>
-            </div>
+            🟢 Yahoo Finance: {stats.get('yahoo', 0)} Calls
+        </div>
+        <div class="api-stat">
+            {'🟢' if finnhub_limiter.can_call() else '🔴'} Finnhub: {finnhub_limiter.get_status()}/30 pro Minute
         </div>
         """, unsafe_allow_html=True)
         
-        alpha_status_list = alpha_manager.get_status()
-        all_alpha_exhausted = all(s['exhausted'] for s in alpha_status_list)
-        if all_alpha_exhausted:
-            st.markdown("""
-            <div style="background: #2d1a1a; padding: 15px; border-radius: 8px; border-left: 4px solid #ff4b4b; margin: 10px 0; color: #ff9999;">
-            ⚠️ <b>Alpha Vantage erschöpft!</b><br>
-            Limit: 25/Tag pro Key<br>
-            Morgen wieder verfügbar
-            </div>
-            """, unsafe_allow_html=True)
-        
-        st.markdown("<div style='margin:10px 0;'><b>Alpha Vantage (25/Tag):</b></div>", unsafe_allow_html=True)
-        for status in alpha_status_list:
-            cls = "key-active" if status['active'] else "key-exhausted" if status['exhausted'] else ""
-            indicator = "▶️" if status['active'] else "✅" if not status['exhausted'] else "❌"
-            st.markdown(f"""
-            <div class="key-indicator {cls}">
-                {indicator} Key {status['index']+1}: {status['calls_today']}/25
-            </div>
-            """, unsafe_allow_html=True)
-        
-        rotations = stats.get('alpha_rotation_count',0)
-        cache_hits = stats.get('cache_hits',0)
-        st.markdown(f'<div style="font-size:0.8rem;margin:5px 0;">🔄 Rotationen: {rotations}</div>', unsafe_allow_html=True)
-        st.markdown(f'<div style="font-size:0.8rem;margin:5px 0;">📦 Cache Hits: {cache_hits}</div>', unsafe_allow_html=True)
-
         st.divider()
+        
         st.header("🚀 Top Movers")
-        movers = st.session_state.get('top_movers_cache', {})
-        movers_source = st.session_state.get('movers_source', 'fallback')
-        
-        if movers:
-            cols = st.columns(2)
-            with cols[0]:
-                st.metric("Gainers", len(movers.get('gainers', [])))
-            with cols[1]:
-                st.metric("Active", len(movers.get('most_active', [])))
-            
-            source_color = "🟢" if movers_source == "yahoo" else "🟡" if movers_source == "cache" else "🔴"
-            st.caption(f"{source_color} Quelle: {movers_source.upper()}")
-            
-            last_movers_check = st.session_state.get('last_movers_check', 0)
-            if last_movers_check:
-                ago = int((time.time() - last_movers_check) / 60)
-                st.caption(f"Letztes Update: vor {ago} Min")
-        else:
-            st.info("Noch keine Movers geladen")
-        
-        st.divider()
-        st.header("🧪 API Tests")
-        col1, col2 = st.columns(2)
-        with col1:
-            if st.button("Test Yahoo", use_container_width=True):
-                try:
-                    time.sleep(1)
-                    data = yf.Ticker("AAPL").history(period="5d")
-                    if not data.empty:
-                        st.success(f"✅ Yahoo OK! {len(data)} Tage")
-                        stats = st.session_state.get('api_stats', {})
-                        stats['yahoo'] = stats.get('yahoo', 0) + 1
-                        st.session_state['api_stats'] = stats
-                    else:
-                        st.error("❌ Keine Daten")
-                except Exception as e:
-                    st.error(f"❌ Fehler: {str(e)[:50]}")
-        with col2:
-            if st.button("Test Finnhub", use_container_width=True):
-                with st.spinner("Teste Finnhub API..."):
-                    news, cached = get_finnhub_news_smart("TSLA")
-                    if news:
-                        st.success(f"✅ Finnhub OK! {len(news)} News")
-                        for n in news[:2]:
-                            st.write(f"- {n['title'][:50]}...")
-                    else:
-                        st.error("❌ Keine News - möglicherweise API-Limit erreicht")
-                        st.info(f"RateLimiter Status: {finnhub_limiter.get_status()}")
-        
-        if st.button("🔄 Movers jetzt laden", use_container_width=True):
+        if st.button("🔄 Movers laden", use_container_width=True):
             with st.spinner("Lade Movers..."):
-                try:
-                    movers, source = fetch_yahoo_movers()
-                    st.session_state['top_movers_cache'] = movers
-                    st.session_state['movers_source'] = source
-                    combined = set(st.session_state['watchlist'])
-                    combined.update(st.session_state.get('catalyst_list', []))
-                    for category, symbols in movers.items():
-                        combined.update(symbols)
-                    st.session_state['combined_universe'] = combined
-                    st.success(f"✅ {len(combined)} Symbole ({source})")
-                    st.rerun()
-                except Exception as e:
-                    st.error(f"❌ Fehler: {str(e)[:100]}")
+                movers, source = fetch_yahoo_movers()
+                st.session_state['top_movers_cache'] = movers
+                st.session_state['movers_source'] = source
+                st.success(f"✅ Geladen ({source})")
+                st.rerun()
         
         st.divider()
         st.header("🔍 Manuelle Abfrage")
-        manual_symbol = st.text_input("Symbol:", placeholder="z.B. NVDA", key="manual").upper()
-        
-        show_debug = st.checkbox("Debug-Info anzeigen", value=True)
+        manual_symbol = st.text_input("Symbol:", placeholder="z.B. NVDA").upper()
         
         if st.button("📊 Analyse starten") and manual_symbol:
-            old_hard_filter = st.session_state.get('hard_filter_active', False)
-            st.session_state['hard_filter_active'] = False
-            
             with st.spinner(f"Analysiere {manual_symbol}..."):
-                try:
-                    time.sleep(1)
-                    scanner = ThreadPoolBullScanner(max_workers=1, min_delay=0.5)
-                    result = scanner.analyze_single_symbol(manual_symbol, 1, 1)
-                    if result:
-                        st.success(f"✅ Setup gefunden für {manual_symbol}!")
-                        
-                        col1, col2 = st.columns(2)
-                        with col1:
-                            st.write(f"**Score:** {result['score']}/100")
-                            st.write(f"**Price:** ${result['price']:.2f}")
-                            st.write(f"**Pullback:** {result['pullback_pct']:.2%}")
-                            st.write(f"**R:R:** {result['rr_ratio']:.1f}x")
-                        with col2:
-                            candle = result.get('candlestick')
-                            if candle:
-                                st.write(f"**Candlestick:** {candle.pattern.value}")
-                                st.write(f"**Strength:** {candle.strength}/100")
-                                st.write(f"**Quality:** {candle.entry_quality}")
-                            else:
-                                st.write("**Candlestick:** Kein Signal")
-                            st.write(f"**Structure:** {'Intakt' if result.get('structure_intact') else 'Nur HL'}")
-                        
-                        st.write(f"**Reasons:** {' | '.join(result['reasons'])}")
-                        
-                        if result.get('news'):
-                            st.write("**📰 News:**")
-                            for n in result['news'][:2]:
-                                st.write(f"- {n['title'][:80]}")
-                        else:
-                            st.info("📭 Keine News verfügbar")
-                        
-                        if old_hard_filter and candle and candle.strength < MIN_CANDLESTICK_STRENGTH:
-                            st.warning(f"⚠️ Im Hard Mode wäre dieses Setup ausgeschlossen (Candlestick {candle.strength}/100)")
-                    else:
-                        st.error(f"❌ Kein Setup für {manual_symbol}")
-                        
-                        if show_debug:
-                            scan_debug = st.session_state.get('scan_debug', [])
-                            if scan_debug:
-                                last = scan_debug[-1]
-                                with st.expander("🔍 Debug Details"):
-                                    st.write("**Checks:**")
-                                    st.json(last.get('checks', {}))
-                                    st.write("**Fehler:**")
-                                    for err in last.get('errors', []):
-                                        st.write(f"- {err}")
-                                        
-                                    errors = last.get('errors', [])
-                                    if any('Pullback' in e for e in errors):
-                                        st.info("💡 Tipp: Pullback außerhalb 2%-70% Bereich. Prüfe ob Aktueller Preis nahe am Hoch ist.")
-                                    if any('Candlestick' in e for e in errors):
-                                        st.info("💡 Tipp: Kein Candlestick-Muster erkannt. Hard Filter deaktivieren um trotzdem zu sehen.")
-                                    if any('Score' in e for e in errors):
-                                        st.info("💡 Tipp: Score zu niedrig. In den Einstellungen den Min-Score Slider reduzieren.")
-                finally:
-                    st.session_state['hard_filter_active'] = old_hard_filter
+                scanner = ThreadPoolBullScanner(max_workers=1, min_delay=0.5)
+                result = scanner.analyze_single_symbol(manual_symbol, 1, 1)
+                if result:
+                    st.success(f"✅ Setup gefunden!")
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        st.write(f"**Score:** {result['score']}/100")
+                        st.write(f"**Price:** ${result['price']:.2f}")
+                        st.write(f"**Pullback:** {result['pullback_pct']:.2%}")
+                    with col2:
+                        st.write(f"**R:R:** {result['rr_ratio']:.1f}x")
+                        st.write(f"**RVol:** {result['rvol']:.1f}x")
+                else:
+                    st.error("❌ Kein Setup gefunden")
         
         if st.button("🔄 Stats zurücksetzen"):
             st.session_state['api_stats'] = {'yahoo':0,'finnhub':0,'alpha_vantage':0,'cache_hits':0,'alpha_rotation_count':0}
-            st.session_state['scan_debug'] = []
-            st.session_state['top_movers_cache'] = FALLBACK_MOVERS
-            st.session_state['movers_source'] = 'fallback'
-            st.session_state['last_movers_check'] = 0
-            
-            combined_watchlist = sorted(list(set(BASE_WATCHLIST + st.session_state.get('catalyst_list', []))))
-            st.session_state['combined_universe'] = set(combined_watchlist + [s for sublist in FALLBACK_MOVERS.values() for s in sublist])
-            
-            alpha_manager.reset()
+            st.session_state['failed_symbols'] = set()
             finnhub_limiter.reset()
-            
-            st.success("Alle Statistiken und Limits zurückgesetzt!")
+            alpha_manager.reset()
+            st.success("Zurückgesetzt!")
             st.rerun()
 
     scan_triggered = False
-    col1, col2 = st.columns([3, 1])
-    with col1:
-        mode = "HARD" if st.session_state.get('hard_filter_active', False) else "BALANCED"
-        if st.button(f'🚀 {mode} SCAN Starten', type="primary"):
-            scan_triggered = True
-    with col2:
-        if st.button('⚡ Quick Scan (Soft)'):
-            st.session_state['hard_filter_active'] = False
-            scan_triggered = True
+    if st.button(f'🚀 SCAN Starten', type="primary", use_container_width=True):
+        scan_triggered = True
 
     if st.session_state.get('auto_refresh', False):
-        last_scan = st.session_state.get('last_scan_time')
-        if last_scan is None:
+        if st.session_state.get('last_scan_time') is None:
             scan_triggered = True
-        else:
-            elapsed_minutes = (datetime.now() - last_scan).total_seconds() / 60
-            if elapsed_minutes >= 30:
-                scan_triggered = True
 
     if scan_triggered:
-        with st.spinner("🔍 Scanne mit balancierten Filtern..."):
+        with st.spinner("🔍 Scanne..."):
             time.sleep(1)
-            market_ctx = get_market_context()
-            if market_ctx.get('market_closed'):
-                st.warning("⚠️ Markt ist möglicherweise geschlossen.")
             
             universe, source = get_combined_universe()
-            watchlist_count = len(st.session_state['watchlist'])
-            catalyst_count = len(st.session_state.get('catalyst_list', []))
-            movers_count = len(universe) - watchlist_count - catalyst_count
             
-            filter_mode = "🔥 HARD (Nur Candlestick)" if st.session_state.get('hard_filter_active', False) else "✅ BALANCED (Candlestick als Bonus)"
-            st.info(f"📊 Modus: **{filter_mode}** | Scanne {len(universe)} Symbole ({watchlist_count} Watchlist + {catalyst_count} Catalyst + {movers_count} Movers)")
-            
-            with st.expander("Aktive Filter"):
-                st.write(f"- Pullback: {MIN_PULLBACK_PERCENT:.0%} - {MAX_PULLBACK_PERCENT:.0%}")
-                st.write(f"- Min Score: {MIN_SCORE_THRESHOLD}")
-                st.write(f"- Candlestick: {'Pflicht (40+)' if st.session_state.get('hard_filter_active') else 'Bonus (40+)'}")
-            
-            st.session_state['scan_debug'] = []
+            st.info(f"📊 Scanne {len(universe)} Symbole")
             
             scan_list = [(sym, get_symbol_source(sym)) for sym in universe]
-            scan_list.sort(key=lambda x: 0 if x[1] == SourceType.CATALYST else 1 if x[1] == SourceType.WATCHLIST else 2)
             
-            scanner = ThreadPoolBullScanner(max_workers=4, min_delay=1.0)
+            scanner = ThreadPoolBullScanner(max_workers=3, min_delay=1.5)
             
             progress_bar = st.progress(0)
             status_text = st.empty()
-            stats_text = st.empty()
-            
-            filtered_by_candlestick = [0]
             
             def update_progress(completed, total, success, errors, candle_filtered, current_sym, current_src):
                 progress = completed / total
                 progress_bar.progress(min(progress, 0.99))
-                filtered_by_candlestick[0] = candle_filtered
-                status_text.text(f"Analysiere: {current_sym} ({completed}/{total})")
-                stats_text.markdown(f"✅ **{success}** Setups | ❌ {errors} Ausschlüsse | 🕯️ {candle_filtered} (Candlestick)")
+                status_text.text(f"Analysiere: {current_sym} ({completed}/{total}) | ✅ {success} Setups")
             
             start_time = time.time()
             results = scanner.scan_batch(scan_list, update_progress)
@@ -1920,159 +1684,30 @@ def main():
             
             progress_bar.empty()
             status_text.empty()
-            stats_text.empty()
             
             st.session_state['scan_results'] = results
             st.session_state['last_scan_time'] = datetime.now()
             
-            hard_filter_active = st.session_state.get('hard_filter_active', False)
-            if hard_filter_active:
-                 st.success(f"✅ {len(results)} HARD-SETUPS in {elapsed:.1f}s gefunden")
-            else:
-                st.success(f"✅ {len(results)} BALANCED-SETUPS in {elapsed:.1f}s gefunden")
-                if filtered_by_candlestick[0] > 0:
-                    st.info(f"💡 {filtered_by_candlestick[0]} hätten durch Hard Filter ausgeschlossen werden")
-            
-            alerts_sent = 0
-            for item in results:
-                if item['score'] > 75:
-                    symbol = item['symbol']
-                    price = item['price']
-                    score = item['score']
-                    if should_send_alert(symbol, price, score):
-                        setup_type = "CATALYST" if (item.get('news') and item['news'][0].get('tier', 0) == 1) else "GOLD"
-                        candle = item.get('candlestick')
-                        success = send_telegram_alert(
-                            symbol, price, item['pullback_pct'],
-                            item['news'][0] if item.get('news') else None,
-                            setup_type, item.get('pe_ratio'),
-                            item.get('api_sources'), item.get('tier'),
-                            item.get('source'), candle
-                        )
-                        if success:
-                            record_alert(symbol, price, score, setup_type)
-                            alerts_sent += 1
-                            if alerts_sent <= 3:
-                                st.toast(f"🚨 {setup_type} Alert: {symbol} @ ${price:.2f} (Score: {score})")
+            st.success(f"✅ {len(results)} SETUPS in {elapsed:.1f}s gefunden")
 
     results = st.session_state.get('scan_results', [])
     if results:
-        hard_filter_active = st.session_state.get('hard_filter_active', False)
+        st.subheader(f"📊 Gefundene Setups: {len(results)}")
         
-        col1, col2, col3, col4 = st.columns([2, 1, 1, 1])
-        with col1:
-            mode_text = "🔥 HARD" if hard_filter_active else "✅ BALANCED"
-            st.subheader(f"📊 Gefundene Setups: {len(results)} ({mode_text})")
-        with col2:
-            sources = {}
-            for r in results:
-                src = r.get('source', SourceType.UNKNOWN)
-                src_val = src.value if hasattr(src, 'value') else str(src)
-                sources[src_val] = sources.get(src_val, 0) + 1
-            source_text = " | ".join([f"{k}: {v}" for k, v in sources.items()])
-            st.caption(f"Quellen: {source_text}")
-        with col3:
-            candlestick_count = sum(1 for r in results if r.get('has_candlestick_confirm', False))
-            st.caption(f"🕯️ Mit Candlestick: {candlestick_count}")
-        with col4:
-            if st.session_state.get('auto_refresh'):
-                count = st.session_state.get('refresh_count', 0)
-                st.markdown(f'<div style="background:#1a1a2e;padding:10px;border-radius:8px;border-left:4px solid #00FF00;">🔴 LIVE #{count}</div>', unsafe_allow_html=True)
-            else:
-                last_time = st.session_state.get('last_scan_time')
-                if last_time:
-                    st.caption(f"Letzter Scan: {last_time.strftime('%H:%M:%S')}")
+        results_sorted = sorted(results, key=lambda x: x['score'], reverse=True)
         
-        sent_alerts = st.session_state.get('sent_alerts', {})
-        active_alerts = len([a for a in sent_alerts.values() if (datetime.now() - a['timestamp']).total_seconds() / 3600 < 24])
-        st.info(f"📱 Aktive Alerts (24h): {active_alerts} | In Cooldown: {len(sent_alerts) - active_alerts}")
-        
-        stats = st.session_state.get('api_stats', {})
-        api_summary = {}
-        for r in results:
-            for s in r.get('api_sources', []):
-                api_summary[s] = api_summary.get(s, 0) + 1
-        cache_count = sum(1 for r in results if r.get('from_cache'))
-        
-        cols = st.columns(4)
-        cols[0].metric("Setups", len(results))
-        cols[1].metric("Yahoo Calls", stats.get('yahoo', 0))
-        cols[2].metric("Finnhub", stats.get('finnhub', 0))
-        cols[3].metric("Alpha Vantage", stats.get('alpha_vantage', 0))
-        
-        if results:
-            quality_dist = {'excellent': 0, 'good': 0, 'moderate': 0, 'weak': 0}
-            pattern_dist = {}
-            for r in results:
-                c = r.get('candlestick')
-                if c:
-                    quality_dist[c.entry_quality] = quality_dist.get(c.entry_quality, 0) + 1
-                    pattern_dist[c.pattern.value] = pattern_dist.get(c.pattern.value, 0) + 1
-            
-            st.write("**🕯️ Candlestick-Qualität:**")
-            q_cols = st.columns(4)
-            for i, (q, count) in enumerate(quality_dist.items()):
-                if count > 0:
-                     q_cols[i].metric(q.upper(), count)
-            
-            st.write("**📊 Erkannte Muster:**")
-            st.write(", ".join([f"{p}: {c}" for p, c in pattern_dist.items() if c > 0]))
-        
-        st.success(f"✅ APIs in Ergebnissen: {api_summary} | Cache: {cache_count}")
-        
-        results_sorted = sorted(results, key=lambda x: (x['score'], x['pullback_pct']), reverse=True)
-        
-        cols = st.columns(4)
-        for i, r in enumerate(results_sorted[:16]):
-            with cols[i % 4]:
+        cols = st.columns(3)
+        for i, r in enumerate(results_sorted[:15]):
+            with cols[i % 3]:
                 render_card(r, st.container())
         
-        with st.expander("📡 API Details"):
-            st.write(f"**Yahoo Finance:** {stats.get('yahoo', 0)} Calls (unbegrenzt)")
-            st.write(f"**Finnhub:** {finnhub_limiter.get_status()}/60 pro Minute")
-            st.write(f"**Alpha Vantage:** {stats.get('alpha_vantage', 0)}/25 pro Tag")
-            ctx = get_market_context()
-            st.write(f"**Marktkontext:** {'Risk-Off' if ctx.get('risk_off') else 'Risk-On'}")
-            st.write(f"**Hard Filter:** {'AKTIV' if hard_filter_active else 'INAKTIV'}")
-            
-            universe = st.session_state.get('combined_universe', set())
-            movers_source = st.session_state.get('movers_source', 'fallback')
-            st.write(f"**Scan-Universum:** {len(universe)} Symbole (Movers: {movers_source})")
-            st.write(f"- Watchlist: {len(st.session_state['watchlist'])}")
-            st.write(f"- Catalyst: {len(st.session_state.get('catalyst_list', []))}")
-            movers = st.session_state.get('top_movers_cache', {})
-            if movers:
-                st.write(f"- Gainers: {len(movers.get('gainers', []))}")
-                st.write(f"- Most Active: {len(movers.get('most_active', []))}")
-            
-            st.write("---")
-            st.write("**Letzte Alerts:**")
-            for symbol, alert in list(st.session_state.get('sent_alerts', {}).items())[:5]:
-                ago = int((datetime.now() - alert['timestamp']).total_seconds() / 60)
-                st.write(f"  • {symbol}: {alert['setup_type']} vor {ago}min @ ${alert['price']:.2f}")
-
-    alerts = st.session_state.get('sent_alerts', {})
-    if alerts:
-        st.write("**Letzte Alerts:**")
-        for symbol, alert in list(alerts.items())[:5]:
-            ago = int((datetime.now() - alert['timestamp']).total_seconds() / 60)
-            st.write(f"  • {symbol}: {alert['setup_type']} vor {ago}min @ ${alert['price']:.2f}")
+        with st.expander("📡 Details"):
+            st.write(f"**Letzter Scan:** {st.session_state.get('last_scan_time', 'N/A')}")
+            st.write(f"**Yahoo Calls:** {stats.get('yahoo', 0)}")
+            st.write(f"**Finnhub Calls:** {stats.get('finnhub', 0)}")
+            st.write(f"**Cache Hits:** {stats.get('cache_hits', 0)}")
     else:
-        st.info("👆 Klicke '🚀 BALANCED SCAN' um Setups zu finden! (Candlestick ist jetzt Bonus, nicht Pflicht)")
-
-    if st.session_state.get('auto_refresh', False):
-        last_scan = st.session_state.get('last_scan_time')
-        if last_scan:
-            next_scan = last_scan + timedelta(minutes=30)
-            remaining = (next_scan - datetime.now()).total_seconds()
-            
-            if remaining > 0:
-                 mins, secs = divmod(int(remaining), 60)
-                 st.sidebar.info(f"⏳ Nächster Autopilot-Scan in: {mins:02d}:{secs:02d} Min")
-                 time.sleep(10)
-                 st.rerun()
-            else:
-                st.rerun()
+        st.info("👆 Klicke 'SCAN Starten' um Setups zu finden!")
 
 if __name__ == "__main__":
     main()
