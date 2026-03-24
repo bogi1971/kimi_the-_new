@@ -247,7 +247,9 @@ class RateLimiter:
     def can_call(self) -> bool:
         with self._lock:
             now = time.time()
+            # Alte Aufrufe entfernen
             self.calls = [c for c in self.calls if now - c < self.window]
+            # Erlaube Aufruf, wenn weniger als max_calls in der letzten window
             return len(self.calls) < self.max_calls
             
     def record_call(self) -> int:
@@ -321,6 +323,7 @@ class AlphaVantageManager:
             'can_call': self.can_call(i)
         } for i, k in enumerate(self.keys)]
 
+# Initialisiere RateLimiter mit korrekten Werten
 finnhub_limiter = RateLimiter(60, 60)
 alpha_manager = AlphaVantageManager(ALPHA_VANTAGE_KEYS)
 
@@ -492,7 +495,6 @@ def get_combined_universe(force_refresh: bool = False) -> Tuple[Set[str], str]:
         st.session_state['movers_source'] = source
         
         combined = set(st.session_state['watchlist'])
-        # Auch manuell hinzugefügte Catalysts sicherstellen
         combined.update(st.session_state.get('catalyst_list', []))
         
         for category, symbols in movers.items():
@@ -509,15 +511,12 @@ def get_combined_universe(force_refresh: bool = False) -> Tuple[Set[str], str]:
     
     return combined, st.session_state.get('movers_source', 'fallback')
 
-def get_symbol_source(symbol: str, session_state: Optional[Dict] = None) -> SourceType:
-    if session_state is None:
-        session_state = st.session_state
-    
-    if symbol in session_state.get('catalyst_list', []):
+def get_symbol_source(symbol: str) -> SourceType:
+    if symbol in st.session_state.get('catalyst_list', []):
         return SourceType.CATALYST
-    if symbol in session_state.get('watchlist', []):
+    if symbol in st.session_state.get('watchlist', []):
         return SourceType.WATCHLIST
-    movers = session_state.get('top_movers_cache', {})
+    movers = st.session_state.get('top_movers_cache', {})
     if symbol in movers.get('gainers', []):
         return SourceType.GAINERS
     if symbol in movers.get('most_active', []):
@@ -537,15 +536,22 @@ def get_finnhub_news_smart(symbol: str) -> Tuple[Optional[List[Dict]], bool]:
         return cached, True
     
     if not FINNHUB_KEYS:
+        logger.warning(f"Keine Finnhub API Keys für {symbol} konfiguriert")
         return None, False
-        
-    current_finnhub_key = random.choice(FINNHUB_KEYS)
     
-    if not finnhub_limiter.can_call():
+    # Finde einen verfügbaren Key
+    current_finnhub_key = None
+    for key in FINNHUB_KEYS:
+        if finnhub_limiter.can_call():
+            current_finnhub_key = key
+            break
+    
+    if not current_finnhub_key:
+        logger.warning(f"Finnhub Rate Limit erreicht für {symbol}")
         return None, False
     
     try:
-        url = f"https://finnhub.io/api/v1/company-news"
+        url = "https://finnhub.io/api/v1/company-news"
         params = {
             'symbol': symbol,
             'from': (datetime.now() - timedelta(days=7)).strftime('%Y-%m-%d'),
@@ -555,7 +561,10 @@ def get_finnhub_news_smart(symbol: str) -> Tuple[Optional[List[Dict]], bool]:
         response = safe_requests_get(url, params, timeout=10)
         if response:
             data = response.json()
+            
+            # Nach erfolgreichem API-Call den Zähler erhöhen
             finnhub_limiter.record_call()
+            
             stats = st.session_state.get('api_stats', {})
             if isinstance(stats, dict):
                 stats['finnhub'] = stats.get('finnhub', 0) + 1
@@ -573,13 +582,20 @@ def get_finnhub_news_smart(symbol: str) -> Tuple[Optional[List[Dict]], bool]:
                         'score': 10
                     })
                 news_cache.set(cache_key, formatted_news)
+                logger.info(f"{len(formatted_news)} News für {symbol} geladen")
                 return formatted_news, False
+            else:
+                logger.debug(f"Keine News für {symbol} gefunden")
+        else:
+            logger.error(f"Finnhub API Fehler für {symbol}: Keine Response")
+            
     except Exception as e:
         logger.error(f"Finnhub Fehler für {symbol}: {e}")
     
     return None, False
 
 def analyze_news_tiered(symbol: str, tier: int, score: int) -> Tuple[List[Dict], List[str], bool]:
+    # Nur für hochwertige Setups News laden (spart API-Calls)
     if tier <= 20 or score > 60:
         news, cached = get_finnhub_news_smart(symbol)
         if news:
@@ -1683,11 +1699,15 @@ def main():
                     st.error(f"❌ Fehler: {str(e)[:50]}")
         with col2:
             if st.button("Test Finnhub", use_container_width=True):
-                news, cached = get_finnhub_news_smart("TSLA")
-                if news:
-                    st.success(f"✅ Finnhub OK! {len(news)} News")
-                else:
-                    st.error("❌ Keine News")
+                with st.spinner("Teste Finnhub API..."):
+                    news, cached = get_finnhub_news_smart("TSLA")
+                    if news:
+                        st.success(f"✅ Finnhub OK! {len(news)} News")
+                        for n in news[:2]:
+                            st.write(f"- {n['title'][:50]}...")
+                    else:
+                        st.error("❌ Keine News - möglicherweise API-Limit erreicht")
+                        st.info(f"RateLimiter Status: {finnhub_limiter.get_status()}")
         
         if st.button("🔄 Movers jetzt laden", use_container_width=True):
             with st.spinner("Lade Movers..."):
@@ -1741,6 +1761,14 @@ def main():
                         
                         st.write(f"**Reasons:** {' | '.join(result['reasons'])}")
                         
+                        # Zeige News falls vorhanden
+                        if result.get('news'):
+                            st.write("**📰 News:**")
+                            for n in result['news'][:2]:
+                                st.write(f"- {n['title'][:80]}")
+                        else:
+                            st.info("📭 Keine News verfügbar")
+                        
                         if old_hard_filter and candle and candle.strength < MIN_CANDLESTICK_STRENGTH:
                             st.warning(f"⚠️ Im Hard Mode wäre dieses Setup ausgeschlossen (Candlestick {candle.strength}/100)")
                     else:
@@ -1777,11 +1805,16 @@ def main():
             combined_watchlist = sorted(list(set(BASE_WATCHLIST + st.session_state.get('catalyst_list', []))))
             st.session_state['combined_universe'] = set(combined_watchlist + [s for sublist in FALLBACK_MOVERS.values() for s in sublist])
             
+            # Alpha Vantage Limits zurücksetzen
             for i in alpha_manager.limiters:
                 alpha_manager.limiters[i]['exhausted'] = False
                 alpha_manager.limiters[i]['calls_today'] = 0
                 alpha_manager.limiters[i]['calls_per_min'] = []
-            st.success("Zurückgesetzt!")
+            
+            # Finnhub RateLimiter zurücksetzen
+            finnhub_limiter.calls = []
+            
+            st.success("Alle Statistiken und Limits zurückgesetzt!")
             st.rerun()
 
     scan_triggered = False
@@ -1822,7 +1855,7 @@ def main():
             with st.expander("Aktive Filter"):
                 st.write(f"- Pullback: {MIN_PULLBACK_PERCENT:.0%} - {MAX_PULLBACK_PERCENT:.0%}")
                 st.write(f"- Min Score: {MIN_SCORE_THRESHOLD}")
-                st.write(f"- Candlestick: {'Pflicht (60+)' if st.session_state.get('hard_filter_active') else 'Bonus (40+)'}")
+                st.write(f"- Candlestick: {'Pflicht (40+)' if st.session_state.get('hard_filter_active') else 'Bonus (40+)'}")
             
             st.session_state['scan_debug'] = []
             
