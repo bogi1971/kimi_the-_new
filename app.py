@@ -1309,25 +1309,69 @@ def main():
         catalysts = st.session_state.get('catalyst_list', [])
         symbols   = list({s for s in (BASE_WATCHLIST + catalysts) if s not in dead})
 
-        with st.spinner(f"🔍 Scanne {len(symbols)} Symbole..."):
-            progress = st.progress(0)
-            status   = st.empty()
+        progress_bar = st.progress(0, text=f"🔍 Scanne {len(symbols)} Symbole...")
+        status_text  = st.empty()
 
-            start   = time.time()
-            results = run_scan(symbols)
-            elapsed = time.time() - start
+        completed = [0]
 
-            progress.empty()
-            status.empty()
+        def scan_with_progress(symbols_list):
+            qqq_df  = get_qqq_data()
+            results = []
+            dead    = st.session_state.get('dead_tickers', set())
+            active  = [s for s in symbols_list if s not in dead]
+            total   = len(active)
 
-            # Filter anwenden
-            filtered = [r for r in results if r.score >= min_score_ui]
-            if min_rs_ui > -10:
-                filtered = [r for r in filtered if r.rs_vs_qqq >= min_rs_ui]
-            if vol_filter == "Nur Healthy":
-                filtered = [r for r in filtered if r.vol_profile == "healthy"]
-            elif vol_filter == "Kein Distribution":
-                filtered = [r for r in filtered if r.vol_profile != "distribution"]
+            ctx = None
+            try:
+                ctx = get_script_run_ctx()
+            except Exception:
+                pass
+
+            def worker(sym):
+                if ctx:
+                    try:
+                        add_script_run_ctx(threading.current_thread(), ctx)
+                    except Exception:
+                        pass
+                return analyze_symbol(sym, qqq_df)
+
+            with ThreadPoolExecutor(max_workers=4) as ex:
+                futures = {ex.submit(worker, s): s for s in active}
+                for fut in as_completed(futures):
+                    sym = futures[fut]
+                    try:
+                        r = fut.result()
+                        if r:
+                            results.append(r)
+                    except Exception as e:
+                        logger.error(f"Scanner Fehler {sym}: {e}")
+
+                    completed[0] += 1
+                    pct = completed[0] / total if total > 0 else 1
+                    progress_bar.progress(
+                        min(pct, 0.99),
+                        text=f"🔍 {completed[0]}/{total} gescannt – {len(results)} Setups gefunden"
+                    )
+
+            return sorted(results, key=lambda x: x.score, reverse=True)
+
+        start   = time.time()
+        results = scan_with_progress(symbols)
+        elapsed = time.time() - start
+
+        progress_bar.progress(1.0, text=f"✅ Scan abgeschlossen!")
+        time.sleep(0.5)
+        progress_bar.empty()
+        status_text.empty()
+
+        # Filter anwenden
+        filtered = [r for r in results if r.score >= min_score_ui]
+        if min_rs_ui > -10:
+            filtered = [r for r in filtered if r.rs_vs_qqq >= min_rs_ui]
+        if vol_filter == "Nur Healthy":
+            filtered = [r for r in filtered if r.vol_profile == "healthy"]
+        elif vol_filter == "Kein Distribution":
+            filtered = [r for r in filtered if r.vol_profile != "distribution"]
 
             st.session_state['scan_results']  = filtered
             st.session_state['last_scan_time'] = datetime.now()
