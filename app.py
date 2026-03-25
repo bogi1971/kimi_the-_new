@@ -498,37 +498,35 @@ def get_market_clock() -> Dict:
 
 _yf_lock = threading.Lock()
 _yf_last_call = 0.0
-_YF_DELAY = 1.2
-_YF_CACHE_TTL = 300
+_YF_DELAY = 0.3
+_YF_CACHE_TTL = 1800
+
+# Globaler In-Memory Cache (kein Streamlit session_state in Threads)
+_yf_mem_cache: Dict[str, Any] = {}
+_yf_mem_cache_ts: Dict[str, float] = {}
+_yf_fail_counts: Dict[str, int] = {}
 
 def fetch_yf(symbol: str, period: str = '3mo') -> Optional[pd.DataFrame]:
-    """Thread-safe Yahoo Finance fetch mit Cache und Dead-Ticker-Erkennung."""
+    """Yahoo Finance fetch mit In-Memory Cache – kein Lock, thread-safe durch yfinance."""
     cache_key = f"{symbol}_{period}"
     now = time.time()
 
     # Cache-Check
-    cache    = st.session_state.get('yahoo_cache', {})
-    cache_ts = st.session_state.get('yahoo_cache_ts', {})
-    if cache_key in cache and (now - cache_ts.get(cache_key, 0)) < _YF_CACHE_TTL:
-        return cache[cache_key]
+    if cache_key in _yf_mem_cache and (now - _yf_mem_cache_ts.get(cache_key, 0)) < _YF_CACHE_TTL:
+        return _yf_mem_cache[cache_key]
 
     # Dead-Ticker-Check
     if symbol in st.session_state.get('dead_tickers', set()):
         return None
-
-    with _yf_lock:
-        elapsed = now - _yf_last_call
-        if elapsed < _YF_DELAY:
-            time.sleep(_YF_DELAY - elapsed)
-        globals()['_yf_last_call'] = time.time()
 
     try:
         ticker = yf.Ticker(symbol)
         df = ticker.history(period=period, interval='1d')
 
         if df is None or df.empty or len(df) < 10:
-            add_dead_ticker(symbol)
-            st.session_state['dead_tickers'].add(symbol)
+            _yf_fail_counts[symbol] = _yf_fail_counts.get(symbol, 0) + 1
+            if _yf_fail_counts[symbol] >= 3:
+                add_dead_ticker(symbol)
             return None
 
         # Pre/Post-Market Preis einsetzen
@@ -539,17 +537,16 @@ def fetch_yf(symbol: str, period: str = '3mo') -> Optional[pd.DataFrame]:
         except Exception:
             pass
 
-        cache[cache_key]    = df
-        cache_ts[cache_key] = time.time()
-        st.session_state['yahoo_cache']    = cache
-        st.session_state['yahoo_cache_ts'] = cache_ts
+        _yf_mem_cache[cache_key]    = df
+        _yf_mem_cache_ts[cache_key] = now
         return df
 
     except Exception as e:
         err = str(e).lower()
         if 'delisted' in err or 'no price data' in err or '404' in err:
-            add_dead_ticker(symbol)
-            st.session_state['dead_tickers'].add(symbol)
+            _yf_fail_counts[symbol] = _yf_fail_counts.get(symbol, 0) + 1
+            if _yf_fail_counts[symbol] >= 3:
+                add_dead_ticker(symbol)
         return None
 
 def get_qqq_data() -> Optional[pd.DataFrame]:
@@ -1075,7 +1072,7 @@ def run_scan(symbols: List[str]) -> List[ScanResult]:
                 pass
         return analyze_symbol(sym, qqq_df)
 
-    with ThreadPoolExecutor(max_workers=4) as ex:
+    with ThreadPoolExecutor(max_workers=8) as ex:
         futures = {ex.submit(worker, s): s for s in active}
         for fut in as_completed(futures):
             try:
@@ -1335,7 +1332,7 @@ def main():
                         pass
                 return analyze_symbol(sym, qqq_df)
 
-            with ThreadPoolExecutor(max_workers=4) as ex:
+            with ThreadPoolExecutor(max_workers=8) as ex:
                 futures = {ex.submit(worker, s): s for s in active}
                 for fut in as_completed(futures):
                     sym = futures[fut]
