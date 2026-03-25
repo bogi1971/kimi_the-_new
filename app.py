@@ -837,21 +837,17 @@ def send_telegram_heartbeat(setups: int, alerts: int, elapsed: float) -> bool:
     if not TELEGRAM_TOKEN or len(TELEGRAM_TOKEN) < 10:
         return False
     now = datetime.now()
-    msg = (
-        f"🤖 <b>Elite Bull Scanner – Heartbeat</b>
-
-"
-        f"🕒 {now.strftime('%H:%M')} Uhr
-"
-        f"📊 Setups gefunden: {setups}
-"
-        f"🚨 Alerts gesendet: {alerts}
-"
-        f"⏱ Scan-Dauer: {elapsed:.1f}s
-
-"
-        f"✅ Scanner läuft normal"
-    )
+    lines = [
+        "🤖 <b>Elite Bull Scanner Heartbeat</b>",
+        "",
+        "🕒 " + now.strftime('%H:%M') + " Uhr",
+        "📊 Setups gefunden: " + str(setups),
+        "🚨 Alerts gesendet: " + str(alerts),
+        "⏱ Scan-Dauer: " + f"{elapsed:.1f}s",
+        "",
+        "✅ Scanner läuft normal"
+    ]
+    msg = "\n".join(lines)
     try:
         requests.post(
             f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
