@@ -298,17 +298,20 @@ BASE_WATCHLIST = [
     "MDB", "GTLB", "ESTC", "SMCI", "DELL", "HPE", "PSTG", "NTAP",
 
     # Cybersecurity
-    "CRWD", "PANW", "ZS", "FTNT", "OKTA", "S", "CYBR", "TENB", "QLYS", "VRNS",
+    "CRWD", "PANW", "ZS", "FTNT", "OKTA", "S", "TENB", "QLYS",
 
     # Software / SaaS
-    "ADSK", "ANSS", "CDNS", "TTD", "HUBS", "BILL", "MNDY", "APPN",
-    "VEEV", "PCTY", "PAYC", "DOCU", "ZM", "RNG", "SMAR",
+    "ADSK", "CDNS", "TTD", "HUBS", "BILL", "MNDY",
+    "VEEV", "PCTY", "PAYC", "DOCU", "ZM",
 
     # Fintech / Payments
     "COIN", "HOOD", "AFRM", "SOFI", "SSNC", "FIS", "FISV", "GPN", "PYPL", "MA", "V",
 
     # Hardware / Consumer Tech
     "ROKU", "LOGI", "STX", "WDC",
+
+    # Quantum / Defense Tech
+    "QBTS", "IONQ", "RGTI", "ACHR", "JOBY",
 
     # Biotech Blue-Chip (langsame Bewegungen, gute Setups)
     "LLY", "ABBV", "AMGN", "GILD", "VRTX", "REGN", "BIIB", "MRNA",
@@ -391,20 +394,25 @@ def load_dead_tickers() -> Set[str]:
 def save_dead_tickers(dead: Set[str]):
     save_json_file(DEAD_TICKERS_FILE, list(dead))
 
-def add_dead_ticker(symbol: str):
-    """Ticker erst nach 3 fehlgeschlagenen Versuchen als tot markieren."""
-    fail_counts = st.session_state.get("fail_counts", {})
-    fail_counts[symbol] = fail_counts.get(symbol, 0) + 1
-    st.session_state["fail_counts"] = fail_counts
+# Globaler Fail-Counter (thread-safe, kein session_state in Threads)
+_global_fail_counts: Dict[str, int] = {}
 
-    if fail_counts[symbol] >= 3:
+def add_dead_ticker(symbol: str):
+    """Ticker erst nach 5 fehlgeschlagenen Versuchen als tot markieren."""
+    _global_fail_counts[symbol] = _global_fail_counts.get(symbol, 0) + 1
+    count = _global_fail_counts[symbol]
+
+    if count >= 5:
         dead = load_dead_tickers()
         dead.add(symbol)
         save_dead_tickers(dead)
-        st.session_state["dead_tickers"].add(symbol)
-        logger.warning(f"💀 {symbol} nach 3 Fehlern als toter Ticker gespeichert")
+        try:
+            st.session_state["dead_tickers"].add(symbol)
+        except Exception:
+            pass
+        logger.warning(f"💀 {symbol} nach 5 Fehlern als toter Ticker gespeichert")
     else:
-        logger.debug(f"⚠️ {symbol} Fehler {fail_counts[symbol]}/3 – noch nicht als tot markiert")
+        logger.debug(f"⚠️ {symbol} Fehler {count}/5")
 
 # ==============================================================================
 # SESSION STATE
