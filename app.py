@@ -392,10 +392,19 @@ def save_dead_tickers(dead: Set[str]):
     save_json_file(DEAD_TICKERS_FILE, list(dead))
 
 def add_dead_ticker(symbol: str):
-    dead = load_dead_tickers()
-    dead.add(symbol)
-    save_dead_tickers(dead)
-    logger.warning(f"💀 {symbol} als toter Ticker gespeichert")
+    """Ticker erst nach 3 fehlgeschlagenen Versuchen als tot markieren."""
+    fail_counts = st.session_state.get("fail_counts", {})
+    fail_counts[symbol] = fail_counts.get(symbol, 0) + 1
+    st.session_state["fail_counts"] = fail_counts
+
+    if fail_counts[symbol] >= 3:
+        dead = load_dead_tickers()
+        dead.add(symbol)
+        save_dead_tickers(dead)
+        st.session_state["dead_tickers"].add(symbol)
+        logger.warning(f"💀 {symbol} nach 3 Fehlern als toter Ticker gespeichert")
+    else:
+        logger.debug(f"⚠️ {symbol} Fehler {fail_counts[symbol]}/3 – noch nicht als tot markiert")
 
 # ==============================================================================
 # SESSION STATE
@@ -418,6 +427,8 @@ def init_session():
         'qqq_loaded_at':    0,
         'yahoo_cache':      {},
         'yahoo_cache_ts':   {},
+        'fail_counts':      {},
+        'last_heartbeat':   None,
     }
     for k, v in defaults.items():
         if k not in st.session_state:
@@ -821,6 +832,36 @@ def send_telegram(result: ScanResult) -> bool:
         return True
     except Exception:
         return False
+
+def send_telegram_heartbeat(setups: int, alerts: int, elapsed: float) -> bool:
+    if not TELEGRAM_TOKEN or len(TELEGRAM_TOKEN) < 10:
+        return False
+    now = datetime.now()
+    msg = (
+        f"🤖 <b>Elite Bull Scanner – Heartbeat</b>
+
+"
+        f"🕒 {now.strftime('%H:%M')} Uhr
+"
+        f"📊 Setups gefunden: {setups}
+"
+        f"🚨 Alerts gesendet: {alerts}
+"
+        f"⏱ Scan-Dauer: {elapsed:.1f}s
+
+"
+        f"✅ Scanner läuft normal"
+    )
+    try:
+        requests.post(
+            f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
+            data={"chat_id": TELEGRAM_CHAT, "text": msg, "parse_mode": "HTML"},
+            timeout=6
+        ).raise_for_status()
+        return True
+    except Exception:
+        return False
+
 
 def should_alert(symbol: str, price: float, score: int) -> bool:
     alerts = st.session_state.get('sent_alerts', {})
@@ -1245,10 +1286,13 @@ def main():
         elif (datetime.now() - last).total_seconds() >= AUTO_SCAN_INTERVAL:
             scan_triggered = True
         else:
-            # Rerun nach verbleibender Zeit
+            # Countdown anzeigen und nach 5s neu laden
             age       = (datetime.now() - last).total_seconds()
-            remaining = max(10, AUTO_SCAN_INTERVAL - age)
-            time.sleep(min(remaining, 30))
+            remaining = max(0, AUTO_SCAN_INTERVAL - age)
+            mins = int(remaining // 60)
+            secs = int(remaining % 60)
+            st.info(f"⏳ Nächster Scan in {mins}:{secs:02d} Minuten...")
+            time.sleep(5)
             st.rerun()
 
     # ── MANUAL SCAN BUTTON ────────────────────────────────────────────────────
@@ -1299,6 +1343,13 @@ def main():
                     if send_telegram(r):
                         record_alert(r.symbol, r.price, r.score)
                         alerts_sent += 1
+
+            # Stündlicher Heartbeat
+            last_hb = st.session_state.get("last_heartbeat")
+            now_hb  = datetime.now()
+            if last_hb is None or (now_hb - last_hb).total_seconds() >= 3600:
+                send_telegram_heartbeat(len(filtered), alerts_sent, elapsed)
+                st.session_state["last_heartbeat"] = now_hb
 
             st.success(f"✅ {len(filtered)} Setups in {elapsed:.1f}s | {alerts_sent} Alerts gesendet")
 
