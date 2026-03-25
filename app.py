@@ -291,21 +291,20 @@ BASE_WATCHLIST = [
 
     # Semiconductors
     "AVGO", "QCOM", "MU", "AMAT", "LRCX", "KLAC", "MRVL", "ON", "TXN",
-    "INTC", "ASML", "TSM", "ARM", "MPWR", "WOLF", "ONTO", "ENTG", "ACLS",
+    "INTC", "TSM", "ARM", "MPWR", "ONTO", "ENTG",
 
     # AI / Cloud Infrastructure
-    "ORCL", "CRM", "NOW", "SNOW", "PLTR", "DDOG", "NET", "CFLT",
-    "MDB", "GTLB", "ESTC", "SMCI", "DELL", "HPE", "PSTG", "NTAP",
+    "ORCL", "CRM", "NOW", "SNOW", "PLTR", "DDOG", "NET",
+    "MDB", "SMCI", "DELL", "HPE", "PSTG", "NTAP",
 
     # Cybersecurity
-    "CRWD", "PANW", "ZS", "FTNT", "OKTA", "S", "TENB", "QLYS",
+    "CRWD", "PANW", "ZS", "FTNT", "OKTA", "TENB",
 
     # Software / SaaS
-    "ADSK", "CDNS", "TTD", "HUBS", "BILL", "MNDY",
-    "VEEV", "PCTY", "PAYC", "DOCU", "ZM",
+    "ADSK", "CDNS", "TTD", "HUBS", "BILL", "MNDY", "VEEV", "PCTY", "PAYC",
 
     # Fintech / Payments
-    "COIN", "HOOD", "AFRM", "SOFI", "SSNC", "FIS", "FISV", "GPN", "PYPL", "MA", "V",
+    "COIN", "HOOD", "AFRM", "SOFI", "PYPL", "MA", "V",
 
     # Hardware / Consumer Tech
     "ROKU", "LOGI", "STX", "WDC",
@@ -313,7 +312,7 @@ BASE_WATCHLIST = [
     # Quantum / Defense Tech
     "QBTS", "IONQ", "RGTI", "ACHR", "JOBY",
 
-    # Biotech Blue-Chip (langsame Bewegungen, gute Setups)
+    # Biotech Blue-Chip
     "LLY", "ABBV", "AMGN", "GILD", "VRTX", "REGN", "BIIB", "MRNA",
     "BMY", "PFE", "ISRG", "DXCM", "IDXX", "ALGN",
 ]
@@ -550,11 +549,8 @@ def fetch_yf(symbol: str, period: str = '3mo') -> Optional[pd.DataFrame]:
         return df
 
     except Exception as e:
-        err = str(e).lower()
-        if 'delisted' in err or 'no price data' in err or '404' in err:
-            _yf_fail_counts[symbol] = _yf_fail_counts.get(symbol, 0) + 1
-            if _yf_fail_counts[symbol] >= 3:
-                add_dead_ticker(symbol)
+        # Nur loggen, NICHT als tot markieren – Streamlit Cloud hat manchmal Aussetzer
+        logger.debug(f"Yahoo Fehler {symbol}: {str(e)[:60]}")
         return None
 
 def get_qqq_data() -> Optional[pd.DataFrame]:
