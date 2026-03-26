@@ -1374,25 +1374,26 @@ def main():
         elif vol_filter == "Kein Distribution":
             filtered = [r for r in filtered if r.vol_profile != "distribution"]
 
-            st.session_state['scan_results']  = filtered
-            st.session_state['last_scan_time'] = datetime.now()
+        # FIX: Immer speichern, nicht nur im elif-Block!
+        st.session_state['scan_results']  = filtered
+        st.session_state['last_scan_time'] = datetime.now()
 
-            # Alerts senden
-            alerts_sent = 0
-            for r in filtered[:10]:
-                if should_alert(r.symbol, r.price, r.score):
-                    if send_telegram(r):
-                        record_alert(r.symbol, r.price, r.score)
-                        alerts_sent += 1
+        # Alerts senden
+        alerts_sent = 0
+        for r in filtered[:10]:
+            if should_alert(r.symbol, r.price, r.score):
+                if send_telegram(r):
+                    record_alert(r.symbol, r.price, r.score)
+                    alerts_sent += 1
 
-            # Stündlicher Heartbeat
-            last_hb = st.session_state.get("last_heartbeat")
-            now_hb  = datetime.now()
-            if last_hb is None or (now_hb - last_hb).total_seconds() >= 3600:
-                send_telegram_heartbeat(len(filtered), alerts_sent, elapsed)
-                st.session_state["last_heartbeat"] = now_hb
+        # Stündlicher Heartbeat
+        last_hb = st.session_state.get("last_heartbeat")
+        now_hb  = datetime.now()
+        if last_hb is None or (now_hb - last_hb).total_seconds() >= 3600:
+            send_telegram_heartbeat(len(filtered), alerts_sent, elapsed)
+            st.session_state["last_heartbeat"] = now_hb
 
-            st.success(f"✅ {len(filtered)} Setups in {elapsed:.1f}s | {alerts_sent} Alerts gesendet")
+        st.success(f"✅ {len(filtered)} Setups in {elapsed:.1f}s | {alerts_sent} Alerts gesendet")
 
     # ── RESULTS ───────────────────────────────────────────────────────────────
     results = st.session_state.get('scan_results', [])
