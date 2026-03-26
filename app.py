@@ -1,7 +1,6 @@
 """
 Elite Bull Scanner Pro V9.0 - Tech Edition
-Fixes: Autopilot, RS vs QQQ, Volume Profile, Dead Ticker Cleanup, HTML Rendering
-Removed: Alpha Vantage, Fallback Meme-Stocks
+Fix: Native Streamlit Components statt HTML für Cards
 """
 
 import streamlit as st
@@ -23,7 +22,6 @@ from datetime import datetime, timedelta
 from typing import Optional, Dict, List, Tuple, Any, Set
 from dataclasses import dataclass, field
 from enum import Enum
-from io import StringIO
 from streamlit.runtime.scriptrunner import add_script_run_ctx, get_script_run_ctx
 
 try:
@@ -48,14 +46,12 @@ st.set_page_config(
 )
 
 # ==============================================================================
-# CSS
+# CSS (nur für globale Styles)
 # ==============================================================================
 
 st.markdown("""
 <style>
 @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;700&family=Syne:wght@700;800&display=swap');
-
-*, *::before, *::after { box-sizing: border-box; }
 
 html, body, [data-testid="stApp"] {
     background: #080c10 !important;
@@ -68,161 +64,66 @@ html, body, [data-testid="stApp"] {
     border-right: 1px solid #1c2128;
 }
 
-.bull-card {
-    border: 1px solid #1c2128;
-    border-radius: 12px;
-    padding: 18px;
-    margin: 10px 0;
+/* Card Container */
+.bull-card-container {
     background: linear-gradient(145deg, #0d1117 0%, #0a0f15 100%);
+    border: 1px solid #1c2128;
     border-left: 3px solid #00ff88;
-    transition: transform 0.15s ease, box-shadow 0.15s ease;
-    position: relative;
-    overflow: hidden;
+    border-radius: 12px;
+    padding: 16px;
+    margin: 8px 0;
 }
-.bull-card::before {
-    content: '';
-    position: absolute;
-    top: 0; left: 0; right: 0;
-    height: 1px;
-    background: linear-gradient(90deg, transparent, #00ff8833, transparent);
-}
-.bull-card:hover {
-    transform: translateY(-2px);
-    box-shadow: 0 8px 24px rgba(0,255,136,0.08);
-}
-.bull-card.gold {
+
+.bull-card-container.gold {
     border-left-color: #FFD700;
 }
-.bull-card.gold::before {
-    background: linear-gradient(90deg, transparent, #FFD70033, transparent);
+
+/* Metric Cards */
+.metric-box {
+    background: #161b22;
+    border-radius: 6px;
+    padding: 8px;
+    text-align: center;
+    border: 1px solid #21262d;
 }
 
-.card-symbol {
-    font-family: 'Syne', sans-serif;
-    font-size: 1.4rem;
-    font-weight: 800;
-    color: #e6edf3;
-    letter-spacing: 0.05em;
+.metric-label {
+    font-size: 0.7rem;
+    color: #8b949e;
 }
 
-.price-display {
-    font-size: 1.6rem;
+.metric-value {
+    font-size: 1rem;
     font-weight: 700;
-    color: #00ff88;
-    margin: 8px 0;
-    font-family: 'JetBrains Mono', monospace;
+    color: #e6edf3;
 }
 
-.badge {
+/* Badges */
+.stBadge {
     display: inline-block;
     padding: 2px 8px;
     border-radius: 4px;
     font-size: 0.7rem;
     font-weight: 700;
     margin: 2px;
-    letter-spacing: 0.05em;
-}
-.badge-green  { background: #0a2918; color: #00ff88; border: 1px solid #00ff8844; }
-.badge-yellow { background: #2a2000; color: #FFD700; border: 1px solid #FFD70044; }
-.badge-red    { background: #2a0a0a; color: #ff6b6b; border: 1px solid #ff6b6b44; }
-.badge-blue   { background: #0a1a2a; color: #58a6ff; border: 1px solid #58a6ff44; }
-.badge-gray   { background: #161b22; color: #8b949e; border: 1px solid #30363d; }
-
-.metric-row {
-    display: flex;
-    gap: 12px;
-    margin: 8px 0;
-    flex-wrap: wrap;
-}
-.metric-item {
-    background: #161b22;
-    border-radius: 6px;
-    padding: 6px 10px;
-    font-size: 0.72rem;
-    color: #8b949e;
-    border: 1px solid #21262d;
-    flex: 1;
-    min-width: 80px;
-    text-align: center;
-}
-.metric-item span {
-    display: block;
-    font-size: 0.9rem;
-    color: #e6edf3;
-    font-weight: 700;
-    margin-top: 2px;
 }
 
-.score-bar-bg {
+/* Progress Bar */
+.score-bar {
     width: 100%;
     height: 4px;
     background: #21262d;
     border-radius: 2px;
-    margin: 6px 0;
-    overflow: hidden;
+    margin: 8px 0;
 }
-.score-bar-fill {
+
+.score-fill {
     height: 100%;
     border-radius: 2px;
     transition: width 0.4s ease;
 }
 
-.sl-tp-row {
-    display: flex;
-    gap: 8px;
-    margin: 8px 0;
-}
-.sl-badge {
-    background: #2a0a0a;
-    color: #ff6b6b;
-    border: 1px solid #ff6b6b44;
-    padding: 4px 10px;
-    border-radius: 4px;
-    font-size: 0.8rem;
-    font-weight: 700;
-    flex: 1;
-    text-align: center;
-}
-.tp-badge {
-    background: #0a2918;
-    color: #00ff88;
-    border: 1px solid #00ff8844;
-    padding: 4px 10px;
-    border-radius: 4px;
-    font-size: 0.8rem;
-    font-weight: 700;
-    flex: 1;
-    text-align: center;
-}
-
-.rs-positive { color: #00ff88; }
-.rs-negative { color: #ff6b6b; }
-
-.link-btn {
-    display: block;
-    background: #161b22;
-    color: #58a6ff !important;
-    text-decoration: none;
-    padding: 7px 12px;
-    border-radius: 6px;
-    margin: 4px 0;
-    font-size: 0.78rem;
-    text-align: center;
-    border: 1px solid #21262d;
-    transition: background 0.15s;
-}
-.link-btn:hover { background: #1c2128; }
-
-.autopilot-status {
-    padding: 10px 16px;
-    border-radius: 8px;
-    font-size: 0.85rem;
-    margin: 8px 0;
-    font-weight: 700;
-}
-.autopilot-on  { background: #0a2918; color: #00ff88; border: 1px solid #00ff8844; }
-.autopilot-off { background: #161b22; color: #8b949e; border: 1px solid #21262d; }
-
+/* Clock */
 .clock-display {
     background: linear-gradient(135deg, #0d1117 0%, #0a0f15 100%);
     border: 1px solid #1c2128;
@@ -230,43 +131,14 @@ html, body, [data-testid="stApp"] {
     padding: 24px;
     text-align: center;
     margin-bottom: 20px;
-    position: relative;
-    overflow: hidden;
 }
-.clock-display::after {
-    content: '';
-    position: absolute;
-    bottom: 0; left: 0; right: 0;
-    height: 2px;
-    background: linear-gradient(90deg, transparent, #00ff88, transparent);
-}
+
 .clock-time {
     font-family: 'Syne', sans-serif;
     font-size: 2.8rem;
     font-weight: 800;
     color: #00ff88;
     letter-spacing: 0.1em;
-    font-variant-numeric: tabular-nums;
-}
-
-.volume-bar {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    margin: 4px 0;
-    font-size: 0.72rem;
-    color: #8b949e;
-}
-.volume-bar-inner {
-    flex: 1;
-    height: 3px;
-    background: #21262d;
-    border-radius: 2px;
-    overflow: hidden;
-}
-.volume-bar-fill {
-    height: 100%;
-    border-radius: 2px;
 }
 </style>
 """, unsafe_allow_html=True)
@@ -1022,110 +894,102 @@ def run_scan(symbols: List[str]) -> List[ScanResult]:
     return sorted(results, key=lambda x: x.score, reverse=True)
 
 # ==============================================================================
-# CARD RENDERER - FIXED VERSION
+# CARD RENDERER - NATIVE STREAMLIT VERSION
 # ==============================================================================
 
 def render_card(r: ScanResult):
-    """Render a result card with proper HTML escaping"""
+    """Render a result card using native Streamlit components"""
+    
+    # Determine colors
     score_color = '#FFD700' if r.score >= 85 else '#00ff88' if r.score >= 70 else '#58a6ff'
-    card_class  = 'bull-card gold' if r.score >= 85 else 'bull-card'
-    rs_class    = 'rs-positive' if r.rs_vs_qqq >= 0 else 'rs-negative'
-    rs_str      = f"+{r.rs_vs_qqq:.1f}%" if r.rs_vs_qqq >= 0 else f"{r.rs_vs_qqq:.1f}%"
+    border_color = '#FFD700' if r.score >= 85 else '#00ff88'
     
-    vol_badge_map = {
-        'healthy': ('badge-green', '✅ Healthy Vol'), 
-        'distribution': ('badge-red', '⚠️ Distribution'), 
-        'neutral': ('badge-gray', '➖ Vol Neutral')
-    }
-    vol_badge = vol_badge_map.get(r.vol_profile, ('badge-gray', '➖'))
+    rs_str = f"+{r.rs_vs_qqq:.1f}%" if r.rs_vs_qqq >= 0 else f"{r.rs_vs_qqq:.1f}%"
+    rs_color = "normal" if r.rs_vs_qqq >= 0 else "inverse"
     
-    src_badge_map = {
-        'watchlist': ('badge-blue', '📋 WL'), 
-        'catalyst': ('badge-yellow', '🧬 CATALYST'), 
-        'gainers': ('badge-green', '🚀 GAINER')
-    }
-    src_badge = src_badge_map.get(r.source.value, ('badge-gray', '📊'))
+    # Source badge
+    src_emoji = "📋" if r.source.value == "watchlist" else "🧬" if r.source.value == "catalyst" else "🚀"
+    src_text = "WL" if r.source.value == "watchlist" else "CATALYST" if r.source.value == "catalyst" else "GAINER"
     
-    has_candle = r.candlestick.pattern != CandlestickPattern.NONE
-
-    # Build news HTML
-    news_html = ""
-    if r.news:
-        n = r.news[0]
-        url = n.get('url') or f"https://finance.yahoo.com/quote/{r.symbol}"
-        title = n["title"][:45].replace('"', '&quot;')
-        news_html = f'<a href="{url}" target="_blank" class="link-btn">📰 {title}...</a>'
-
-    # Build candle HTML
-    candle_html = ""
-    if has_candle:
-        c_color = '#00ff88' if r.candlestick.strength >= 65 else '#FFD700'
-        pattern_val = r.candlestick.pattern.value.upper()
-        candle_html = f'<span class="badge" style="background:#0a1a0a;color:{c_color};border:1px solid {c_color}44;">🕯 {pattern_val} {r.candlestick.strength}/100</span>'
-
-    struct_html = '<span class="badge badge-green">📈 HH+HL</span>' if r.structure_intact else '<span class="badge badge-gray">📈 HL</span>'
-
-    reasons_html = ' '.join([f'<span class="badge badge-gray">{x}</span>' for x in r.reasons[:5]])
-
-    vol_pct = min(100, int(r.rvol / 3 * 100))
-    vol_color = '#00ff88' if r.rvol > 1.5 else '#FFD700' if r.rvol > 1 else '#8b949e'
-
-    # Build card HTML
-    card_html = f'''
-    <div class="{card_class}">
-        <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:10px;">
-            <span class="card-symbol">{r.symbol}</span>
-            <span class="badge {src_badge[0]}">{src_badge[1]}</span>
-        </div>
-
-        <div class="price-display">${r.price:.2f}</div>
-
-        <div style="margin:6px 0;">
-            {struct_html}
-            <span class="badge {vol_badge[0]}">{vol_badge[1]}</span>
-            {candle_html}
-        </div>
-
-        <div class="metric-row">
-            <div class="metric-item">Pullback<span>-{r.pullback_pct*100:.1f}%</span></div>
-            <div class="metric-item">RS vs QQQ<span class="{rs_class}">{rs_str}</span></div>
-            <div class="metric-item">R:R<span>{r.rr_ratio:.1f}x</span></div>
-            <div class="metric-item">RVol<span>{r.rvol:.1f}x</span></div>
-        </div>
-
-        <div class="volume-bar">
-            <span>Vol</span>
-            <div class="volume-bar-inner">
-                <div class="volume-bar-fill" style="width:{vol_pct}%;background:{vol_color};"></div>
-            </div>
-            <span>{r.rvol:.1f}x</span>
-        </div>
-
-        <div class="sl-tp-row">
-            <div class="sl-badge">🛑 SL ${r.stop_loss:.2f}</div>
-            <div class="tp-badge">🎯 TP ${r.target:.2f}</div>
-        </div>
-
-        <div style="font-size:0.72rem;color:{score_color};font-weight:700;margin:6px 0;">
-            Score: {r.score}/100
-        </div>
-        <div class="score-bar-bg">
-            <div class="score-bar-fill" style="width:{r.score}%;background:{score_color};"></div>
-        </div>
-
-        <div style="margin:8px 0;">{reasons_html}</div>
-
-        {news_html}
-        <a href="https://www.tradingview.com/chart/?symbol={r.symbol}" target="_blank" class="link-btn">📈 TradingView</a>
-    </div>
-    '''
+    # Volume badge
+    vol_emoji = "✅" if r.vol_profile == "healthy" else "⚠️" if r.vol_profile == "distribution" else "➖"
     
-    st.markdown(card_html, unsafe_allow_html=True)
-
-    # Gemini button outside of HTML
-    if st.button(f"🤖 Gemini", key=f"gem_{r.symbol}_{random.randint(1000,9999)}"):
-        with st.spinner(f"Analysiere {r.symbol}..."):
-            st.info(gemini_analysis(r), icon="💡")
+    # Create container with border
+    with st.container():
+        # Custom CSS for this card
+        st.markdown(f"""
+        <div style="
+            background: linear-gradient(145deg, #0d1117 0%, #0a0f15 100%);
+            border: 1px solid #1c2128;
+            border-left: 3px solid {border_color};
+            border-radius: 12px;
+            padding: 16px;
+            margin: 8px 0;
+        ">
+        """, unsafe_allow_html=True)
+        
+        # Header row
+        c1, c2 = st.columns([3, 1])
+        with c1:
+            st.markdown(f"### {r.symbol}")
+        with c2:
+            st.caption(f"{src_emoji} {src_text}")
+        
+        # Price
+        st.markdown(f"<h2 style='color: #00ff88; margin: 0;'>${r.price:.2f}</h2>", unsafe_allow_html=True)
+        
+        # Badges row
+        badge_cols = st.columns(4)
+        with badge_cols[0]:
+            st.caption(f"{'📈 HH+HL' if r.structure_intact else '📈 HL'}")
+        with badge_cols[1]:
+            st.caption(f"{vol_emoji} {r.vol_profile.title()}")
+        with badge_cols[2]:
+            if r.candlestick.pattern != CandlestickPattern.NONE:
+                st.caption(f"🕯 {r.candlestick.pattern.value.upper()}")
+        with badge_cols[3]:
+            st.caption(f"Score: {r.score}")
+        
+        # Metrics grid
+        m1, m2, m3, m4 = st.columns(4)
+        with m1:
+            st.metric("Pullback", f"-{r.pullback_pct*100:.1f}%")
+        with m2:
+            st.metric("RS vs QQQ", rs_str, delta=None)
+        with m3:
+            st.metric("R:R", f"{r.rr_ratio:.1f}x")
+        with m4:
+            st.metric("RVol", f"{r.rvol:.1f}x")
+        
+        # SL/TP row
+        sl_tp_cols = st.columns(2)
+        with sl_tp_cols[0]:
+            st.error(f"🛑 SL ${r.stop_loss:.2f}")
+        with sl_tp_cols[1]:
+            st.success(f"🎯 TP ${r.target:.2f}")
+        
+        # Score bar
+        st.progress(r.score / 100, text=f"Score: {r.score}/100")
+        
+        # Reasons
+        st.caption(" | ".join(r.reasons[:5]))
+        
+        # News
+        if r.news:
+            n = r.news[0]
+            st.link_button(f"📰 {n['title'][:40]}...", n.get('url', f"https://finance.yahoo.com/quote/{r.symbol}"), use_container_width=True)
+        
+        # TradingView link
+        st.link_button("📈 TradingView Chart", f"https://www.tradingview.com/chart/?symbol={r.symbol}", use_container_width=True)
+        
+        # Close div
+        st.markdown("</div>", unsafe_allow_html=True)
+        
+        # Gemini button (outside the HTML div)
+        if st.button(f"🤖 Gemini Analyse", key=f"gem_{r.symbol}_{random.randint(1000,9999)}", use_container_width=True):
+            with st.spinner(f"Analysiere {r.symbol}..."):
+                analysis = gemini_analysis(r)
+                st.info(analysis, icon="💡")
 
 # ==============================================================================
 # MAIN UI
@@ -1138,7 +1002,7 @@ def main():
     progress_html = ""
     if clock.get('progress'):
         pct = int(clock['progress'] * 100)
-        progress_html = f'<div style="width:100%;height:2px;background:#21262d;border-radius:1px;margin-top:12px;"><div style="width:{pct}%;height:100%;background:#00ff88;border-radius:1px;transition:width 1s;"></div></div>'
+        progress_html = f'<div style="width:100%;height:2px;background:#21262d;border-radius:1px;margin-top:12px;"><div style="width:{pct}%;height:100%;background:#00ff88;border-radius:1px;"></div></div>'
 
     st.markdown(f'''
     <div class="clock-display">
@@ -1165,11 +1029,11 @@ def main():
             if last:
                 age = (datetime.now() - last).total_seconds()
                 remaining = max(0, AUTO_SCAN_INTERVAL - age)
-                st.markdown(f'<div class="autopilot-status autopilot-on">✅ AN – nächster Scan in {int(remaining//60)}:{int(remaining%60):02d}</div>', unsafe_allow_html=True)
+                st.markdown(f'<div style="padding:10px 16px;border-radius:8px;font-size:0.85rem;margin:8px 0;font-weight:700;background:#0a2918;color:#00ff88;border:1px solid #00ff8844;">✅ AN – nächster Scan in {int(remaining//60)}:{int(remaining%60):02d}</div>', unsafe_allow_html=True)
             else:
-                st.markdown('<div class="autopilot-status autopilot-on">✅ AN – erster Scan läuft gleich</div>', unsafe_allow_html=True)
+                st.markdown('<div style="padding:10px 16px;border-radius:8px;font-size:0.85rem;margin:8px 0;font-weight:700;background:#0a2918;color:#00ff88;border:1px solid #00ff8844;">✅ AN – erster Scan läuft gleich</div>', unsafe_allow_html=True)
         else:
-            st.markdown('<div class="autopilot-status autopilot-off">⏸ AUS</div>', unsafe_allow_html=True)
+            st.markdown('<div style="padding:10px 16px;border-radius:8px;font-size:0.85rem;margin:8px 0;font-weight:700;background:#161b22;color:#8b949e;border:1px solid #21262d;">⏸ AUS</div>', unsafe_allow_html=True)
 
         st.divider()
 
