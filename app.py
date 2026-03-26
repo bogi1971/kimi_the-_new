@@ -1,6 +1,6 @@
 """
-Elite Bull Scanner Pro V9.0 - Tech Edition
-Fix: Native Streamlit Components statt HTML für Cards
+Elite Bull Scanner Pro V9.1 - Tech Edition
+Fix: Native Streamlit, Preis-Filter ≤$50, Farbcodierung Gold/Grün
 """
 
 import streamlit as st
@@ -41,12 +41,12 @@ logger = logging.getLogger(__name__)
 
 st.set_page_config(
     layout="wide",
-    page_title="Elite Bull Scanner Pro V9.0",
+    page_title="Elite Bull Scanner Pro V9.1",
     page_icon="🐂",
 )
 
 # ==============================================================================
-# CSS (nur für globale Styles)
+# CSS
 # ==============================================================================
 
 st.markdown("""
@@ -64,66 +64,6 @@ html, body, [data-testid="stApp"] {
     border-right: 1px solid #1c2128;
 }
 
-/* Card Container */
-.bull-card-container {
-    background: linear-gradient(145deg, #0d1117 0%, #0a0f15 100%);
-    border: 1px solid #1c2128;
-    border-left: 3px solid #00ff88;
-    border-radius: 12px;
-    padding: 16px;
-    margin: 8px 0;
-}
-
-.bull-card-container.gold {
-    border-left-color: #FFD700;
-}
-
-/* Metric Cards */
-.metric-box {
-    background: #161b22;
-    border-radius: 6px;
-    padding: 8px;
-    text-align: center;
-    border: 1px solid #21262d;
-}
-
-.metric-label {
-    font-size: 0.7rem;
-    color: #8b949e;
-}
-
-.metric-value {
-    font-size: 1rem;
-    font-weight: 700;
-    color: #e6edf3;
-}
-
-/* Badges */
-.stBadge {
-    display: inline-block;
-    padding: 2px 8px;
-    border-radius: 4px;
-    font-size: 0.7rem;
-    font-weight: 700;
-    margin: 2px;
-}
-
-/* Progress Bar */
-.score-bar {
-    width: 100%;
-    height: 4px;
-    background: #21262d;
-    border-radius: 2px;
-    margin: 8px 0;
-}
-
-.score-fill {
-    height: 100%;
-    border-radius: 2px;
-    transition: width 0.4s ease;
-}
-
-/* Clock */
 .clock-display {
     background: linear-gradient(135deg, #0d1117 0%, #0a0f15 100%);
     border: 1px solid #1c2128;
@@ -151,24 +91,46 @@ MIN_PULLBACK_PCT   = 0.02
 MAX_PULLBACK_PCT   = 0.60
 AUTO_SCAN_INTERVAL = 1800
 ALERT_COOLDOWN_MIN = 60
-MIN_SCORE          = 55
+MIN_SCORE          = 70        # Mindestens 70 für grün
 MIN_PRICE          = 5.0
+MAX_PRICE          = 50.0      # NEU: Max $50
 CATALYST_FILE      = "catalysts.json"
 DEAD_TICKERS_FILE  = "dead_tickers.json"
 
+# Alle Tech-Aktien ≤ $50 (typischerweise, muss geprüft werden)
+# Entfernt: LLY, ABBV, AVGO, ORCL, CRM, NOW, SNOW, TSM, MA, V, etc.
 BASE_WATCHLIST = [
-    "AAPL", "MSFT", "NVDA", "GOOGL", "META", "AMZN", "TSLA", "AMD",
-    "AVGO", "QCOM", "MU", "AMAT", "LRCX", "KLAC", "MRVL", "ON", "TXN",
-    "INTC", "TSM", "ARM", "MPWR", "ONTO", "ENTG",
-    "ORCL", "CRM", "NOW", "SNOW", "PLTR", "DDOG", "NET",
-    "MDB", "SMCI", "DELL", "HPE", "PSTG", "NTAP",
+    # Mega-Cap Tech (unter $50)
+    "AMD", "INTC", "PLTR", "COIN", "HOOD",
+    
+    # Semiconductors (unter $50)
+    "QCOM", "MU", "AMAT", "MRVL", "ON", "TXN", "ARM",
+    
+    # AI / Cloud (unter $50)
+    "NET", "DDOG", "MDB", "DELL", "HPE", "PSTG", "NTAP",
+    
+    # Cybersecurity (unter $50)
     "CRWD", "PANW", "ZS", "FTNT", "OKTA", "TENB",
+    
+    # Software / SaaS (unter $50)
     "ADSK", "CDNS", "TTD", "HUBS", "BILL", "MNDY", "VEEV", "PCTY", "PAYC",
-    "COIN", "HOOD", "AFRM", "SOFI", "PYPL", "MA", "V",
+    
+    # Fintech / Payments (unter $50)
+    "AFRM", "SOFI", "PYPL",
+    
+    # Hardware / Consumer Tech (unter $50)
     "ROKU", "LOGI", "STX", "WDC",
+    
+    # Quantum / Defense Tech (unter $50)
     "QBTS", "IONQ", "RGTI", "ACHR", "JOBY",
-    "LLY", "ABBV", "AMGN", "GILD", "VRTX", "REGN", "BIIB", "MRNA",
-    "BMY", "PFE", "ISRG", "DXCM", "IDXX", "ALGN",
+    
+    # Biotech (unter $50)
+    "AMGN", "GILD", "VRTX", "REGN", "BIIB", "MRNA",
+    "BMY", "PFE", "DXCM", "IDXX", "ALGN",
+    
+    # Weitere unter $50
+    "DDOG", "SNOW", "ZM", "UBER", "LYFT", "SQ", "SHOP",
+    "TWLO", "FSLY", "ESTC", "SPLK", "DOCU", "CRWD",
 ]
 
 # ==============================================================================
@@ -742,7 +704,8 @@ def analyze_symbol(symbol: str, qqq_df: Optional[pd.DataFrame]) -> Optional[Scan
 
     current_price = float(df_clean['Close'].iloc[-1])
 
-    if current_price < MIN_PRICE:
+    # NEU: Preis-Filter $5 - $50
+    if current_price < MIN_PRICE or current_price > MAX_PRICE:
         return None
 
     struct = analyze_structure(df_clean)
@@ -807,6 +770,7 @@ def analyze_symbol(symbol: str, qqq_df: Optional[pd.DataFrame]) -> Optional[Scan
         news = get_news(symbol)
         if news: score += 8
 
+    # NEU: Nur Score ≥ 70 anzeigen
     if score < MIN_SCORE:
         return None
 
@@ -894,102 +858,106 @@ def run_scan(symbols: List[str]) -> List[ScanResult]:
     return sorted(results, key=lambda x: x.score, reverse=True)
 
 # ==============================================================================
-# CARD RENDERER - NATIVE STREAMLIT VERSION
+# CARD RENDERER - MIT FARBIGER UMRAHMUNG
 # ==============================================================================
 
 def render_card(r: ScanResult):
-    """Render a result card using native Streamlit components"""
+    """Render a result card with colored border based on score"""
     
-    # Determine colors
-    score_color = '#FFD700' if r.score >= 85 else '#00ff88' if r.score >= 70 else '#58a6ff'
-    border_color = '#FFD700' if r.score >= 85 else '#00ff88'
+    # Farb-Logik
+    if r.score >= 90:
+        border_color = "#FFD700"  # Gold
+        bg_color = "#1a1a0a"
+        header_color = "#FFD700"
+        quality_text = "🥇 ELITE"
+    elif r.score >= 70:
+        border_color = "#00ff88"  # Grün
+        bg_color = "#0a1a0f"
+        header_color = "#00ff88"
+        quality_text = "🟢 STRONG"
+    else:
+        return  # Sollte nicht passieren wegen Filter, aber sicherheitshalber
     
     rs_str = f"+{r.rs_vs_qqq:.1f}%" if r.rs_vs_qqq >= 0 else f"{r.rs_vs_qqq:.1f}%"
-    rs_color = "normal" if r.rs_vs_qqq >= 0 else "inverse"
     
     # Source badge
     src_emoji = "📋" if r.source.value == "watchlist" else "🧬" if r.source.value == "catalyst" else "🚀"
-    src_text = "WL" if r.source.value == "watchlist" else "CATALYST" if r.source.value == "catalyst" else "GAINER"
     
-    # Volume badge
+    # Volume emoji
     vol_emoji = "✅" if r.vol_profile == "healthy" else "⚠️" if r.vol_profile == "distribution" else "➖"
     
-    # Create container with border
+    # Container mit farbigem Rand
     with st.container():
-        # Custom CSS for this card
+        # HTML-Wrapper für farbigen Rand
         st.markdown(f"""
         <div style="
-            background: linear-gradient(145deg, #0d1117 0%, #0a0f15 100%);
-            border: 1px solid #1c2128;
-            border-left: 3px solid {border_color};
+            background: linear-gradient(145deg, {bg_color} 0%, #0d1117 100%);
+            border: 2px solid {border_color};
             border-radius: 12px;
             padding: 16px;
             margin: 8px 0;
+            box-shadow: 0 4px 12px {border_color}33;
         ">
         """, unsafe_allow_html=True)
         
-        # Header row
-        c1, c2 = st.columns([3, 1])
+        # Header: Symbol + Qualität
+        c1, c2, c3 = st.columns([2, 1, 1])
         with c1:
-            st.markdown(f"### {r.symbol}")
+            st.markdown(f"<h3 style='color: {header_color}; margin: 0; font-family: Syne, sans-serif;'>{r.symbol}</h3>", unsafe_allow_html=True)
         with c2:
-            st.caption(f"{src_emoji} {src_text}")
+            st.markdown(f"<p style='color: {border_color}; font-weight: bold; margin: 0;'>{quality_text}</p>", unsafe_allow_html=True)
+        with c3:
+            st.caption(f"{src_emoji} ${r.price:.2f}")
         
-        # Price
-        st.markdown(f"<h2 style='color: #00ff88; margin: 0;'>${r.price:.2f}</h2>", unsafe_allow_html=True)
+        # Progress bar für Score
+        st.progress(r.score / 100, text=f"Score: {r.score}/100")
         
-        # Badges row
-        badge_cols = st.columns(4)
-        with badge_cols[0]:
-            st.caption(f"{'📈 HH+HL' if r.structure_intact else '📈 HL'}")
-        with badge_cols[1]:
-            st.caption(f"{vol_emoji} {r.vol_profile.title()}")
-        with badge_cols[2]:
-            if r.candlestick.pattern != CandlestickPattern.NONE:
-                st.caption(f"🕯 {r.candlestick.pattern.value.upper()}")
-        with badge_cols[3]:
-            st.caption(f"Score: {r.score}")
-        
-        # Metrics grid
+        # Key Metrics in 4 Spalten
         m1, m2, m3, m4 = st.columns(4)
         with m1:
-            st.metric("Pullback", f"-{r.pullback_pct*100:.1f}%")
+            st.metric("Pullback", f"-{r.pullback_pct*100:.1f}%", delta=None)
         with m2:
+            delta_color = "normal" if r.rs_vs_qqq >= 0 else "inverse"
             st.metric("RS vs QQQ", rs_str, delta=None)
         with m3:
             st.metric("R:R", f"{r.rr_ratio:.1f}x")
         with m4:
             st.metric("RVol", f"{r.rvol:.1f}x")
         
-        # SL/TP row
-        sl_tp_cols = st.columns(2)
-        with sl_tp_cols[0]:
+        # SL / TP
+        sl_col, tp_col = st.columns(2)
+        with sl_col:
             st.error(f"🛑 SL ${r.stop_loss:.2f}")
-        with sl_tp_cols[1]:
+        with tp_col:
             st.success(f"🎯 TP ${r.target:.2f}")
         
-        # Score bar
-        st.progress(r.score / 100, text=f"Score: {r.score}/100")
+        # Details
+        with st.expander("Details"):
+            st.caption("**Technische Indikatoren:**")
+            st.write(f"• Struktur: {'📈 HH+HL' if r.structure_intact else '📈 HL'}")
+            st.write(f"• Volumen: {vol_emoji} {r.vol_profile.title()}")
+            if r.candlestick.pattern != CandlestickPattern.NONE:
+                st.write(f"• Candlestick: 🕯 {r.candlestick.pattern.value.upper()} ({r.candlestick.strength}/100)")
+            
+            st.caption("**Signale:**")
+            st.write(" | ".join(r.reasons[:5]))
+            
+            if r.news:
+                n = r.news[0]
+                st.caption("**News:**")
+                st.link_button(f"📰 {n['title'][:40]}...", n.get('url', f"https://finance.yahoo.com/quote/{r.symbol}"), use_container_width=True)
         
-        # Reasons
-        st.caption(" | ".join(r.reasons[:5]))
+        # Links
+        st.link_button("📈 TradingView", f"https://www.tradingview.com/chart/?symbol={r.symbol}", use_container_width=True)
         
-        # News
-        if r.news:
-            n = r.news[0]
-            st.link_button(f"📰 {n['title'][:40]}...", n.get('url', f"https://finance.yahoo.com/quote/{r.symbol}"), use_container_width=True)
-        
-        # TradingView link
-        st.link_button("📈 TradingView Chart", f"https://www.tradingview.com/chart/?symbol={r.symbol}", use_container_width=True)
-        
-        # Close div
-        st.markdown("</div>", unsafe_allow_html=True)
-        
-        # Gemini button (outside the HTML div)
-        if st.button(f"🤖 Gemini Analyse", key=f"gem_{r.symbol}_{random.randint(1000,9999)}", use_container_width=True):
+        # Gemini Button
+        if st.button(f"🤖 Gemini", key=f"gem_{r.symbol}_{random.randint(1000,9999)}", use_container_width=True):
             with st.spinner(f"Analysiere {r.symbol}..."):
                 analysis = gemini_analysis(r)
                 st.info(analysis, icon="💡")
+        
+        # Schließender Div
+        st.markdown("</div>", unsafe_allow_html=True)
 
 # ==============================================================================
 # MAIN UI
@@ -1037,6 +1005,16 @@ def main():
 
         st.divider()
 
+        # Info Box
+        st.info("""
+        **Filter aktiv:**
+        • Preis: $5 - $50
+        • Score: ≥70 (Grün)
+        • Score: ≥90 (Gold)
+        """)
+
+        st.divider()
+
         # Catalyst Manager
         st.markdown("### 🧬 Catalyst Manager")
         with st.expander("Liste verwalten"):
@@ -1059,14 +1037,6 @@ def main():
 
         st.divider()
 
-        # Filter
-        st.markdown("### 🎛 Filter")
-        min_score_ui = st.slider("Min Score", 40, 85, MIN_SCORE)
-        min_rs_ui    = st.slider("Min RS vs QQQ (%)", -10, 10, -5)
-        vol_filter   = st.selectbox("Volumen-Profil", ["Alle", "Nur Healthy", "Kein Distribution"])
-
-        st.divider()
-
         # Dead Tickers
         dead = st.session_state.get('dead_tickers', set())
         if dead:
@@ -1082,15 +1052,16 @@ def main():
 
         # Manuelle Analyse
         st.markdown("### 🔍 Einzelanalyse")
-        manual = st.text_input("Symbol:", placeholder="z.B. NVDA").upper()
+        manual = st.text_input("Symbol:", placeholder="z.B. AMD").upper()
         if st.button("Analysieren") and manual:
             with st.spinner(f"Analysiere {manual}..."):
                 qqq = get_qqq_data()
                 r   = analyze_symbol(manual, qqq)
                 if r:
-                    st.success(f"Score: {r.score}/100 | RS: {r.rs_vs_qqq:+.1f}% | R:R {r.rr_ratio:.1f}x")
+                    color = "🥇 GOLD" if r.score >= 90 else "🟢 GRÜN"
+                    st.success(f"{color} | Score: {r.score}/100 | ${r.price:.2f}")
                 else:
-                    st.error("Kein Setup gefunden")
+                    st.error("Kein Setup gefunden (Preis >$50 oder Score <70)")
 
     # ── AUTO-TRIGGER ──────────────────────────────────────────────────────────
     scan_triggered = False
@@ -1128,7 +1099,7 @@ def main():
         catalysts = st.session_state.get('catalyst_list', [])
         symbols   = list({s for s in (BASE_WATCHLIST + catalysts) if s not in dead})
 
-        progress_bar = st.progress(0, text=f"🔍 Scanne {len(symbols)} Symbole...")
+        progress_bar = st.progress(0, text=f"🔍 Scanne {len(symbols)} Symbole (Preis-Filter: $5-$50)...")
         status_text  = st.empty()
 
         completed = [0]
@@ -1183,23 +1154,16 @@ def main():
         progress_bar.empty()
         status_text.empty()
 
-        # Filter anwenden
-        filtered = [r for r in results if r.score >= min_score_ui]
-        if min_rs_ui > -10:
-            filtered = [r for r in filtered if r.rs_vs_qqq >= min_rs_ui]
-        if vol_filter == "Nur Healthy":
-            filtered = [r for r in filtered if r.vol_profile == "healthy"]
-        elif vol_filter == "Kein Distribution":
-            filtered = [r for r in filtered if r.vol_profile != "distribution"]
+        # KEINE zusätzlichen Filter mehr nötig, da analyze_symbol bereits filtert
+        filtered = results
 
-        # FIX: Immer speichern!
         st.session_state['scan_results']  = filtered
         st.session_state['last_scan_time'] = datetime.now()
 
-        # Alerts senden
+        # Alerts senden (nur für Gold)
         alerts_sent = 0
-        for r in filtered[:10]:
-            if should_alert(r.symbol, r.price, r.score):
+        for r in filtered:
+            if r.score >= 90 and should_alert(r.symbol, r.price, r.score):
                 if send_telegram(r):
                     record_alert(r.symbol, r.price, r.score)
                     alerts_sent += 1
@@ -1211,7 +1175,11 @@ def main():
             send_telegram_heartbeat(len(filtered), alerts_sent, elapsed)
             st.session_state["last_heartbeat"] = now_hb
 
-        st.success(f"✅ {len(filtered)} Setups in {elapsed:.1f}s | {alerts_sent} Alerts gesendet")
+        # Ergebnis-Zusammenfassung
+        gold_count = sum(1 for r in filtered if r.score >= 90)
+        green_count = sum(1 for r in filtered if 70 <= r.score < 90)
+        
+        st.success(f"✅ {len(filtered)} Setups | 🥇 {gold_count} Gold | 🟢 {green_count} Grün | {alerts_sent} Alerts")
 
     # ── RESULTS ───────────────────────────────────────────────────────────────
     results = st.session_state.get('scan_results', [])
@@ -1219,26 +1187,34 @@ def main():
     if results:
         last_scan = st.session_state.get('last_scan_time')
         if last_scan:
-            st.caption(f"Letzter Scan: {last_scan.strftime('%H:%M:%S')} · {len(results)} Setups")
+            st.caption(f"Letzter Scan: {last_scan.strftime('%H:%M:%S')}")
 
-        # Stats Row
-        avg_rs   = np.mean([r.rs_vs_qqq for r in results])
-        avg_rr   = np.mean([r.rr_ratio for r in results])
-        healthy  = sum(1 for r in results if r.vol_profile == "healthy")
-        with_can = sum(1 for r in results if r.candlestick.pattern != CandlestickPattern.NONE)
-
+        # Stats
+        gold_results = [r for r in results if r.score >= 90]
+        green_results = [r for r in results if 70 <= r.score < 90]
+        
         c1, c2, c3, c4 = st.columns(4)
-        c1.metric("Setups",        len(results))
-        c2.metric("Ø RS vs QQQ",  f"{avg_rs:+.1f}%")
-        c3.metric("Ø R:R",        f"{avg_rr:.1f}x")
-        c4.metric("Healthy Vol",  f"{healthy}/{len(results)}")
+        c1.metric("🥇 Gold Setups", len(gold_results))
+        c2.metric("🟢 Grün Setups", len(green_results))
+        c3.metric("Ø Score", f"{np.mean([r.score for r in results]):.0f}")
+        c4.metric("Ø Preis", f"${np.mean([r.price for r in results]):.2f}")
 
         st.divider()
 
-        cols = st.columns(3)
-        for i, r in enumerate(results[:15]):
-            with cols[i % 3]:
-                render_card(r)
+        # Gold zuerst anzeigen
+        if gold_results:
+            st.markdown("### 🥇 GOLD SETUPS (Score ≥90)")
+            cols = st.columns(3)
+            for i, r in enumerate(gold_results[:9]):
+                with cols[i % 3]:
+                    render_card(r)
+        
+        if green_results:
+            st.markdown("### 🟢 GRÜNE SETUPS (Score 70-89)")
+            cols = st.columns(3)
+            for i, r in enumerate(green_results[:12]):
+                with cols[i % 3]:
+                    render_card(r)
 
     else:
         st.markdown('''
@@ -1248,7 +1224,8 @@ def main():
                 Bereit zum Scannen
             </div>
             <div style="margin-top:8px;font-size:0.85rem;">
-                Klicke "SCAN STARTEN" oder aktiviere den Autopilot
+                Klicke "SCAN STARTEN" für Setups $5-$50<br>
+                🥇 Gold (≥90) | 🟢 Grün (70-89)
             </div>
         </div>
         ''', unsafe_allow_html=True)
