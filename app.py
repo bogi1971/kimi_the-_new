@@ -1,6 +1,6 @@
 """
 Elite Bull Scanner Pro V9.0 - Tech Edition
-Fixes: Autopilot, RS vs QQQ, Volume Profile, Dead Ticker Cleanup
+Fixes: Autopilot, RS vs QQQ, Volume Profile, Dead Ticker Cleanup, HTML Rendering
 Removed: Alpha Vantage, Fallback Meme-Stocks
 """
 
@@ -277,42 +277,24 @@ html, body, [data-testid="stApp"] {
 
 MIN_PULLBACK_PCT   = 0.02
 MAX_PULLBACK_PCT   = 0.60
-AUTO_SCAN_INTERVAL = 1800       # 30 Minuten
+AUTO_SCAN_INTERVAL = 1800
 ALERT_COOLDOWN_MIN = 60
 MIN_SCORE          = 55
-MIN_PRICE          = 5.0        # Kein Penny-Stock-Müll
+MIN_PRICE          = 5.0
 CATALYST_FILE      = "catalysts.json"
 DEAD_TICKERS_FILE  = "dead_tickers.json"
 
-# Nur echte Tech-Aktien – keine Crypto/Meme
 BASE_WATCHLIST = [
-    # Mega-Cap Tech
     "AAPL", "MSFT", "NVDA", "GOOGL", "META", "AMZN", "TSLA", "AMD",
-
-    # Semiconductors
     "AVGO", "QCOM", "MU", "AMAT", "LRCX", "KLAC", "MRVL", "ON", "TXN",
     "INTC", "TSM", "ARM", "MPWR", "ONTO", "ENTG",
-
-    # AI / Cloud Infrastructure
     "ORCL", "CRM", "NOW", "SNOW", "PLTR", "DDOG", "NET",
     "MDB", "SMCI", "DELL", "HPE", "PSTG", "NTAP",
-
-    # Cybersecurity
     "CRWD", "PANW", "ZS", "FTNT", "OKTA", "TENB",
-
-    # Software / SaaS
     "ADSK", "CDNS", "TTD", "HUBS", "BILL", "MNDY", "VEEV", "PCTY", "PAYC",
-
-    # Fintech / Payments
     "COIN", "HOOD", "AFRM", "SOFI", "PYPL", "MA", "V",
-
-    # Hardware / Consumer Tech
     "ROKU", "LOGI", "STX", "WDC",
-
-    # Quantum / Defense Tech
     "QBTS", "IONQ", "RGTI", "ACHR", "JOBY",
-
-    # Biotech Blue-Chip
     "LLY", "ABBV", "AMGN", "GILD", "VRTX", "REGN", "BIIB", "MRNA",
     "BMY", "PFE", "ISRG", "DXCM", "IDXX", "ALGN",
 ]
@@ -356,8 +338,8 @@ class ScanResult:
     target:        float
     rr_ratio:      float
     rvol:          float
-    rs_vs_qqq:     float        # Relative Strength vs QQQ
-    vol_profile:   str          # "healthy" | "distribution" | "neutral"
+    rs_vs_qqq:     float
+    vol_profile:   str
     reasons:       List[str]
     news:          List[Dict]   = field(default_factory=list)
     source:        SourceType   = SourceType.UNKNOWN
@@ -393,14 +375,11 @@ def load_dead_tickers() -> Set[str]:
 def save_dead_tickers(dead: Set[str]):
     save_json_file(DEAD_TICKERS_FILE, list(dead))
 
-# Globaler Fail-Counter (thread-safe, kein session_state in Threads)
 _global_fail_counts: Dict[str, int] = {}
 
 def add_dead_ticker(symbol: str):
-    """Ticker erst nach 5 fehlgeschlagenen Versuchen als tot markieren."""
     _global_fail_counts[symbol] = _global_fail_counts.get(symbol, 0) + 1
     count = _global_fail_counts[symbol]
-
     if count >= 5:
         dead = load_dead_tickers()
         dead.add(symbol)
@@ -410,8 +389,6 @@ def add_dead_ticker(symbol: str):
         except Exception:
             pass
         logger.warning(f"💀 {symbol} nach 5 Fehlern als toter Ticker gespeichert")
-    else:
-        logger.debug(f"⚠️ {symbol} Fehler {count}/5")
 
 # ==============================================================================
 # SESSION STATE
@@ -503,26 +480,17 @@ def get_market_clock() -> Dict:
 # YAHOO FINANCE CACHE
 # ==============================================================================
 
-_yf_lock = threading.Lock()
-_yf_last_call = 0.0
-_YF_DELAY = 0.3
-_YF_CACHE_TTL = 1800
-
-# Globaler In-Memory Cache (kein Streamlit session_state in Threads)
 _yf_mem_cache: Dict[str, Any] = {}
 _yf_mem_cache_ts: Dict[str, float] = {}
 _yf_fail_counts: Dict[str, int] = {}
 
 def fetch_yf(symbol: str, period: str = '3mo') -> Optional[pd.DataFrame]:
-    """Yahoo Finance fetch mit In-Memory Cache – kein Lock, thread-safe durch yfinance."""
     cache_key = f"{symbol}_{period}"
     now = time.time()
 
-    # Cache-Check
-    if cache_key in _yf_mem_cache and (now - _yf_mem_cache_ts.get(cache_key, 0)) < _YF_CACHE_TTL:
+    if cache_key in _yf_mem_cache and (now - _yf_mem_cache_ts.get(cache_key, 0)) < 1800:
         return _yf_mem_cache[cache_key]
 
-    # Dead-Ticker-Check
     if symbol in st.session_state.get('dead_tickers', set()):
         return None
 
@@ -536,7 +504,6 @@ def fetch_yf(symbol: str, period: str = '3mo') -> Optional[pd.DataFrame]:
                 add_dead_ticker(symbol)
             return None
 
-        # Pre/Post-Market Preis einsetzen
         try:
             pm = ticker.fast_info.last_price
             if pm and pm > 0:
@@ -549,12 +516,10 @@ def fetch_yf(symbol: str, period: str = '3mo') -> Optional[pd.DataFrame]:
         return df
 
     except Exception as e:
-        # Nur loggen, NICHT als tot markieren – Streamlit Cloud hat manchmal Aussetzer
         logger.debug(f"Yahoo Fehler {symbol}: {str(e)[:60]}")
         return None
 
 def get_qqq_data() -> Optional[pd.DataFrame]:
-    """QQQ Daten für Relative Strength – gecacht 1h."""
     now = time.time()
     if (st.session_state.get('qqq_data') is not None and
             now - st.session_state.get('qqq_loaded_at', 0) < 3600):
@@ -571,10 +536,6 @@ def get_qqq_data() -> Optional[pd.DataFrame]:
 # ==============================================================================
 
 def calc_rs_vs_qqq(symbol_df: pd.DataFrame, qqq_df: pd.DataFrame, days: int = 20) -> float:
-    """
-    Berechnet Relative Strength: wie viel hat der Ticker über/unter QQQ performed
-    in den letzten N Tagen. Positiv = outperformance.
-    """
     try:
         sym_close = symbol_df['Close'].tail(days + 1)
         qqq_close = qqq_df['Close'].tail(days + 1)
@@ -594,10 +555,6 @@ def calc_rs_vs_qqq(symbol_df: pd.DataFrame, qqq_df: pd.DataFrame, days: int = 20
 # ==============================================================================
 
 def analyze_volume_profile(df: pd.DataFrame, pullback_start_idx: int) -> str:
-    """
-    Analysiert ob Volumen beim Pullback abnimmt (gesund) oder zunimmt (Distribution).
-    pullback_start_idx: Index des letzten Hochs
-    """
     try:
         if pullback_start_idx < 0 or len(df) < pullback_start_idx + 2:
             return "neutral"
@@ -617,9 +574,9 @@ def analyze_volume_profile(df: pd.DataFrame, pullback_start_idx: int) -> str:
         ratio = avg_pullbk / avg_pre
 
         if ratio < 0.7:
-            return "healthy"       # Volumen nimmt ab → gesunder Pullback
+            return "healthy"
         elif ratio > 1.2:
-            return "distribution"  # Volumen steigt → Verkaufsdruck
+            return "distribution"
         else:
             return "neutral"
     except Exception:
@@ -661,29 +618,23 @@ def analyze_candlestick(df: pd.DataFrame, swing_low: float, recent_high: float) 
 
     signals, strength, confirms = [], 0, 0
 
-    # Hammer
     if p3['lower'] > 0.60 and p3['body_pct'] < 0.30 and p3['bull'] and near_support:
         signals.append("HAMMER"); strength += 40
         if p3['lower'] > 0.70: strength += 10; confirms += 1
 
-    # Bullish Engulfing
     if p2['c'] < p2['o'] and p3['bull'] and p3['o'] < p2['c'] and p3['c'] > p2['o'] and p3['body'] > p2['body'] * 1.2:
         signals.append("ENGULFING"); strength += 35
         if near_support: strength += 10; confirms += 1
 
-    # Morning Star
     if p1 and p1['c'] < p1['o'] and p1['body_pct'] > 0.5 and p2['body_pct'] < 0.3 and p3['bull'] and p3['c'] > (p1['o'] + p1['c']) / 2:
         signals.append("MORNING_STAR"); strength += 45; confirms += 1
 
-    # Three White Soldiers
     if p0 and all(x['bull'] for x in [p0, p1, p2]) and p1['c'] > p0['c'] and p2['c'] > p1['c'] and all(x['body_pct'] > 0.4 for x in [p0, p1, p2]):
         signals.append("3_SOLDIERS"); strength += 50; confirms += 2
 
-    # Piercing Line
     if p2['c'] < p2['o'] and p3['bull'] and p3['o'] < p2['l'] and p3['c'] > (p2['o'] + p2['c']) / 2 and near_support:
         signals.append("PIERCING"); strength += 30
 
-    # Volume Confirmation
     avg_vol = float(df['Volume'].tail(20).mean())
     if avg_vol > 0 and float(df['Volume'].iloc[-1]) > avg_vol * 1.5:
         confirms += 1; strength += 5
@@ -859,7 +810,6 @@ def send_telegram_heartbeat(setups: int, alerts: int, elapsed: float) -> bool:
     except Exception:
         return False
 
-
 def should_alert(symbol: str, price: float, score: int) -> bool:
     alerts = st.session_state.get('sent_alerts', {})
     now = datetime.now()
@@ -920,11 +870,9 @@ def analyze_symbol(symbol: str, qqq_df: Optional[pd.DataFrame]) -> Optional[Scan
 
     current_price = float(df_clean['Close'].iloc[-1])
 
-    # Mindestpreis-Filter – kein Penny-Stock
     if current_price < MIN_PRICE:
         return None
 
-    # Struktur-Analyse
     struct = analyze_structure(df_clean)
     if not (struct['structure_intact'] or struct['higher_lows'] or struct['higher_highs']):
         return None
@@ -935,7 +883,6 @@ def analyze_symbol(symbol: str, qqq_df: Optional[pd.DataFrame]) -> Optional[Scan
     if last_swing_low <= 0 or last_swing_high <= 0:
         return None
 
-    # Pullback berechnen (vs. letztem Swing-High, nicht altem Allzeithoch)
     lookback   = min(60, len(df_clean) - 5)
     recent     = df_clean.tail(lookback)
     recent_high = float(recent['High'].max())
@@ -944,56 +891,45 @@ def analyze_symbol(symbol: str, qqq_df: Optional[pd.DataFrame]) -> Optional[Scan
     if pullback < MIN_PULLBACK_PCT or pullback > MAX_PULLBACK_PCT:
         return None
 
-    # Preis nicht zu weit unter Swing Low
     if current_price < last_swing_low * 0.88:
         return None
 
-    # Relative Strength vs QQQ
     rs = calc_rs_vs_qqq(df_clean, qqq_df) if qqq_df is not None else 0.0
 
-    # Volumen-Profil
     high_idx    = struct.get('high_idx', -1)
     vol_profile = analyze_volume_profile(df_clean, high_idx)
 
-    # Candlestick
     candle = analyze_candlestick(df_clean, last_swing_low, recent_high)
 
-    # Score berechnen
     score = 30
 
     if struct['structure_intact']:  score += 15
     elif struct['higher_lows']:     score += 10
     elif struct['higher_highs']:    score += 6
 
-    # RS Bonus/Malus
     if rs > 5:    score += 18
     elif rs > 2:  score += 12
     elif rs > 0:  score += 6
     elif rs < -5: score -= 10
     elif rs < -2: score -= 5
 
-    # Volumen-Profil
     if vol_profile == "healthy":      score += 15
     elif vol_profile == "distribution": score -= 10
 
-    # RVol
     avg_vol    = float(df_clean['Volume'].mean())
     curr_vol   = float(df_clean['Volume'].iloc[-1])
     rvol       = curr_vol / avg_vol if avg_vol > 0 else 1.0
     if rvol > 2:    score += 15
     elif rvol > 1:  score += 8
 
-    # Support-Nähe
     support_dist = (current_price - last_swing_low) / current_price if current_price > 0 else 1.0
     if support_dist < 0.03: score += 12
     elif support_dist < 0.08: score += 6
 
-    # Candlestick
     if candle.strength >= 50:
         score += candle.strength // 5
         if candle.confirmation: score += 8
 
-    # News (nur bei hohem Score)
     news = []
     if score >= 60 and FINNHUB_KEYS:
         news = get_news(symbol)
@@ -1002,7 +938,6 @@ def analyze_symbol(symbol: str, qqq_df: Optional[pd.DataFrame]) -> Optional[Scan
     if score < MIN_SCORE:
         return None
 
-    # Stop Loss & Target
     try:
         atr = float((df_clean['High'].rolling(14).max() - df_clean['Low'].rolling(14).min()).mean())
         if not np.isfinite(atr) or atr <= 0:
@@ -1020,7 +955,6 @@ def analyze_symbol(symbol: str, qqq_df: Optional[pd.DataFrame]) -> Optional[Scan
     if rr_ratio < 0.8:
         return None
 
-    # Reasons
     reasons = [f"📉 -{pullback*100:.1f}%"]
     if struct['structure_intact']:  reasons.append("📈 HH+HL")
     elif struct['higher_lows']:     reasons.append("📈 HL")
@@ -1032,7 +966,6 @@ def analyze_symbol(symbol: str, qqq_df: Optional[pd.DataFrame]) -> Optional[Scan
     if candle.strength >= 50: reasons.append(f"🕯 {candle.pattern.value}")
     if news: reasons.append("📰 News")
 
-    # Source
     source = SourceType.WATCHLIST
     if symbol in st.session_state.get('catalyst_list', []):
         source = SourceType.CATALYST
@@ -1089,28 +1022,46 @@ def run_scan(symbols: List[str]) -> List[ScanResult]:
     return sorted(results, key=lambda x: x.score, reverse=True)
 
 # ==============================================================================
-# CARD RENDERER
+# CARD RENDERER - FIXED VERSION
 # ==============================================================================
 
 def render_card(r: ScanResult):
+    """Render a result card with proper HTML escaping"""
     score_color = '#FFD700' if r.score >= 85 else '#00ff88' if r.score >= 70 else '#58a6ff'
     card_class  = 'bull-card gold' if r.score >= 85 else 'bull-card'
     rs_class    = 'rs-positive' if r.rs_vs_qqq >= 0 else 'rs-negative'
     rs_str      = f"+{r.rs_vs_qqq:.1f}%" if r.rs_vs_qqq >= 0 else f"{r.rs_vs_qqq:.1f}%"
-    vol_badge   = {'healthy': ('badge-green', '✅ Healthy Vol'), 'distribution': ('badge-red', '⚠️ Distribution'), 'neutral': ('badge-gray', '➖ Vol Neutral')}.get(r.vol_profile, ('badge-gray', '➖'))
-    src_badge   = {'watchlist': ('badge-blue', '📋 WL'), 'catalyst': ('badge-yellow', '🧬 CATALYST'), 'gainers': ('badge-green', '🚀 GAINER')}.get(r.source.value, ('badge-gray', '📊'))
-    has_candle  = r.candlestick.pattern != CandlestickPattern.NONE
+    
+    vol_badge_map = {
+        'healthy': ('badge-green', '✅ Healthy Vol'), 
+        'distribution': ('badge-red', '⚠️ Distribution'), 
+        'neutral': ('badge-gray', '➖ Vol Neutral')
+    }
+    vol_badge = vol_badge_map.get(r.vol_profile, ('badge-gray', '➖'))
+    
+    src_badge_map = {
+        'watchlist': ('badge-blue', '📋 WL'), 
+        'catalyst': ('badge-yellow', '🧬 CATALYST'), 
+        'gainers': ('badge-green', '🚀 GAINER')
+    }
+    src_badge = src_badge_map.get(r.source.value, ('badge-gray', '📊'))
+    
+    has_candle = r.candlestick.pattern != CandlestickPattern.NONE
 
+    # Build news HTML
     news_html = ""
     if r.news:
         n = r.news[0]
         url = n.get('url') or f"https://finance.yahoo.com/quote/{r.symbol}"
-        news_html = f'<a href="{url}" target="_blank" class="link-btn">📰 {n["title"][:45]}...</a>'
+        title = n["title"][:45].replace('"', '&quot;')
+        news_html = f'<a href="{url}" target="_blank" class="link-btn">📰 {title}...</a>'
 
+    # Build candle HTML
     candle_html = ""
     if has_candle:
         c_color = '#00ff88' if r.candlestick.strength >= 65 else '#FFD700'
-        candle_html = f'<span class="badge" style="background:#0a1a0a;color:{c_color};border:1px solid {c_color}44;">🕯 {r.candlestick.pattern.value.upper()} {r.candlestick.strength}/100</span>'
+        pattern_val = r.candlestick.pattern.value.upper()
+        candle_html = f'<span class="badge" style="background:#0a1a0a;color:{c_color};border:1px solid {c_color}44;">🕯 {pattern_val} {r.candlestick.strength}/100</span>'
 
     struct_html = '<span class="badge badge-green">📈 HH+HL</span>' if r.structure_intact else '<span class="badge badge-gray">📈 HL</span>'
 
@@ -1119,7 +1070,8 @@ def render_card(r: ScanResult):
     vol_pct = min(100, int(r.rvol / 3 * 100))
     vol_color = '#00ff88' if r.rvol > 1.5 else '#FFD700' if r.rvol > 1 else '#8b949e'
 
-    st.markdown(f"""
+    # Build card HTML
+    card_html = f'''
     <div class="{card_class}">
         <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:10px;">
             <span class="card-symbol">{r.symbol}</span>
@@ -1166,8 +1118,11 @@ def render_card(r: ScanResult):
         {news_html}
         <a href="https://www.tradingview.com/chart/?symbol={r.symbol}" target="_blank" class="link-btn">📈 TradingView</a>
     </div>
-    """, unsafe_allow_html=True)
+    '''
+    
+    st.markdown(card_html, unsafe_allow_html=True)
 
+    # Gemini button outside of HTML
     if st.button(f"🤖 Gemini", key=f"gem_{r.symbol}_{random.randint(1000,9999)}"):
         with st.spinner(f"Analysiere {r.symbol}..."):
             st.info(gemini_analysis(r), icon="💡")
@@ -1185,7 +1140,7 @@ def main():
         pct = int(clock['progress'] * 100)
         progress_html = f'<div style="width:100%;height:2px;background:#21262d;border-radius:1px;margin-top:12px;"><div style="width:{pct}%;height:100%;background:#00ff88;border-radius:1px;transition:width 1s;"></div></div>'
 
-    st.markdown(f"""
+    st.markdown(f'''
     <div class="clock-display">
         <div class="clock-time">{clock['time']}</div>
         <div style="margin:10px 0;">
@@ -1196,7 +1151,7 @@ def main():
         <div style="color:#8b949e;font-size:0.9rem;">{clock['countdown']}</div>
         {progress_html}
     </div>
-    """, unsafe_allow_html=True)
+    ''', unsafe_allow_html=True)
 
     # ── SIDEBAR ──────────────────────────────────────────────────────────────
     with st.sidebar:
@@ -1273,7 +1228,7 @@ def main():
                 else:
                     st.error("Kein Setup gefunden")
 
-    # ── AUTO-TRIGGER (FIX) ────────────────────────────────────────────────────
+    # ── AUTO-TRIGGER ──────────────────────────────────────────────────────────
     scan_triggered = False
 
     if st.session_state.get('auto_refresh'):
@@ -1283,7 +1238,6 @@ def main():
         elif (datetime.now() - last).total_seconds() >= AUTO_SCAN_INTERVAL:
             scan_triggered = True
         else:
-            # Countdown anzeigen und nach 5s neu laden
             age       = (datetime.now() - last).total_seconds()
             remaining = max(0, AUTO_SCAN_INTERVAL - age)
             mins = int(remaining // 60)
@@ -1374,7 +1328,7 @@ def main():
         elif vol_filter == "Kein Distribution":
             filtered = [r for r in filtered if r.vol_profile != "distribution"]
 
-        # FIX: Immer speichern, nicht nur im elif-Block!
+        # FIX: Immer speichern!
         st.session_state['scan_results']  = filtered
         st.session_state['last_scan_time'] = datetime.now()
 
@@ -1423,7 +1377,7 @@ def main():
                 render_card(r)
 
     else:
-        st.markdown("""
+        st.markdown('''
         <div style="text-align:center;padding:60px 20px;color:#8b949e;">
             <div style="font-size:3rem;margin-bottom:16px;">🐂</div>
             <div style="font-family:'Syne',sans-serif;font-size:1.2rem;color:#e6edf3;">
@@ -1433,7 +1387,7 @@ def main():
                 Klicke "SCAN STARTEN" oder aktiviere den Autopilot
             </div>
         </div>
-        """, unsafe_allow_html=True)
+        ''', unsafe_allow_html=True)
 
     # Auto-Rerun für Clock-Update
     if clock.get('is_open'):
