@@ -1,6 +1,7 @@
 """
-Elite Bull Scanner Pro V9.1 - Tech Edition
-Fix: Native Streamlit, Preis-Filter ≤$50, Farbcodierung Gold/Grün
+Elite Bull Scanner Pro V9.0 - Tech Edition
+Fixes: Autopilot, RS vs QQQ, Volume Profile, Dead Ticker Cleanup
+Removed: Alpha Vantage, Fallback Meme-Stocks
 """
 
 import streamlit as st
@@ -22,6 +23,7 @@ from datetime import datetime, timedelta
 from typing import Optional, Dict, List, Tuple, Any, Set
 from dataclasses import dataclass, field
 from enum import Enum
+from io import StringIO
 from streamlit.runtime.scriptrunner import add_script_run_ctx, get_script_run_ctx
 
 try:
@@ -41,7 +43,7 @@ logger = logging.getLogger(__name__)
 
 st.set_page_config(
     layout="wide",
-    page_title="Elite Bull Scanner Pro V9.1",
+    page_title="Elite Bull Scanner Pro V9.0",
     page_icon="🐂",
 )
 
@@ -52,6 +54,8 @@ st.set_page_config(
 st.markdown("""
 <style>
 @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;700&family=Syne:wght@700;800&display=swap');
+
+*, *::before, *::after { box-sizing: border-box; }
 
 html, body, [data-testid="stApp"] {
     background: #080c10 !important;
@@ -64,6 +68,161 @@ html, body, [data-testid="stApp"] {
     border-right: 1px solid #1c2128;
 }
 
+.bull-card {
+    border: 1px solid #1c2128;
+    border-radius: 12px;
+    padding: 18px;
+    margin: 10px 0;
+    background: linear-gradient(145deg, #0d1117 0%, #0a0f15 100%);
+    border-left: 3px solid #00ff88;
+    transition: transform 0.15s ease, box-shadow 0.15s ease;
+    position: relative;
+    overflow: hidden;
+}
+.bull-card::before {
+    content: '';
+    position: absolute;
+    top: 0; left: 0; right: 0;
+    height: 1px;
+    background: linear-gradient(90deg, transparent, #00ff8833, transparent);
+}
+.bull-card:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 8px 24px rgba(0,255,136,0.08);
+}
+.bull-card.gold {
+    border-left-color: #FFD700;
+}
+.bull-card.gold::before {
+    background: linear-gradient(90deg, transparent, #FFD70033, transparent);
+}
+
+.card-symbol {
+    font-family: 'Syne', sans-serif;
+    font-size: 1.4rem;
+    font-weight: 800;
+    color: #e6edf3;
+    letter-spacing: 0.05em;
+}
+
+.price-display {
+    font-size: 1.6rem;
+    font-weight: 700;
+    color: #00ff88;
+    margin: 8px 0;
+    font-family: 'JetBrains Mono', monospace;
+}
+
+.badge {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 4px;
+    font-size: 0.7rem;
+    font-weight: 700;
+    margin: 2px;
+    letter-spacing: 0.05em;
+}
+.badge-green  { background: #0a2918; color: #00ff88; border: 1px solid #00ff8844; }
+.badge-yellow { background: #2a2000; color: #FFD700; border: 1px solid #FFD70044; }
+.badge-red    { background: #2a0a0a; color: #ff6b6b; border: 1px solid #ff6b6b44; }
+.badge-blue   { background: #0a1a2a; color: #58a6ff; border: 1px solid #58a6ff44; }
+.badge-gray   { background: #161b22; color: #8b949e; border: 1px solid #30363d; }
+
+.metric-row {
+    display: flex;
+    gap: 12px;
+    margin: 8px 0;
+    flex-wrap: wrap;
+}
+.metric-item {
+    background: #161b22;
+    border-radius: 6px;
+    padding: 6px 10px;
+    font-size: 0.72rem;
+    color: #8b949e;
+    border: 1px solid #21262d;
+    flex: 1;
+    min-width: 80px;
+    text-align: center;
+}
+.metric-item span {
+    display: block;
+    font-size: 0.9rem;
+    color: #e6edf3;
+    font-weight: 700;
+    margin-top: 2px;
+}
+
+.score-bar-bg {
+    width: 100%;
+    height: 4px;
+    background: #21262d;
+    border-radius: 2px;
+    margin: 6px 0;
+    overflow: hidden;
+}
+.score-bar-fill {
+    height: 100%;
+    border-radius: 2px;
+    transition: width 0.4s ease;
+}
+
+.sl-tp-row {
+    display: flex;
+    gap: 8px;
+    margin: 8px 0;
+}
+.sl-badge {
+    background: #2a0a0a;
+    color: #ff6b6b;
+    border: 1px solid #ff6b6b44;
+    padding: 4px 10px;
+    border-radius: 4px;
+    font-size: 0.8rem;
+    font-weight: 700;
+    flex: 1;
+    text-align: center;
+}
+.tp-badge {
+    background: #0a2918;
+    color: #00ff88;
+    border: 1px solid #00ff8844;
+    padding: 4px 10px;
+    border-radius: 4px;
+    font-size: 0.8rem;
+    font-weight: 700;
+    flex: 1;
+    text-align: center;
+}
+
+.rs-positive { color: #00ff88; }
+.rs-negative { color: #ff6b6b; }
+
+.link-btn {
+    display: block;
+    background: #161b22;
+    color: #58a6ff !important;
+    text-decoration: none;
+    padding: 7px 12px;
+    border-radius: 6px;
+    margin: 4px 0;
+    font-size: 0.78rem;
+    text-align: center;
+    border: 1px solid #21262d;
+    transition: background 0.15s;
+}
+.link-btn:hover { background: #1c2128; }
+
+.autopilot-status {
+    padding: 10px 16px;
+    border-radius: 8px;
+    font-size: 0.85rem;
+    margin: 8px 0;
+    font-weight: 700;
+}
+.autopilot-on  { background: #0a2918; color: #00ff88; border: 1px solid #00ff8844; }
+.autopilot-off { background: #161b22; color: #8b949e; border: 1px solid #21262d; }
+
 .clock-display {
     background: linear-gradient(135deg, #0d1117 0%, #0a0f15 100%);
     border: 1px solid #1c2128;
@@ -71,14 +230,43 @@ html, body, [data-testid="stApp"] {
     padding: 24px;
     text-align: center;
     margin-bottom: 20px;
+    position: relative;
+    overflow: hidden;
 }
-
+.clock-display::after {
+    content: '';
+    position: absolute;
+    bottom: 0; left: 0; right: 0;
+    height: 2px;
+    background: linear-gradient(90deg, transparent, #00ff88, transparent);
+}
 .clock-time {
     font-family: 'Syne', sans-serif;
     font-size: 2.8rem;
     font-weight: 800;
     color: #00ff88;
     letter-spacing: 0.1em;
+    font-variant-numeric: tabular-nums;
+}
+
+.volume-bar {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin: 4px 0;
+    font-size: 0.72rem;
+    color: #8b949e;
+}
+.volume-bar-inner {
+    flex: 1;
+    height: 3px;
+    background: #21262d;
+    border-radius: 2px;
+    overflow: hidden;
+}
+.volume-bar-fill {
+    height: 100%;
+    border-radius: 2px;
 }
 </style>
 """, unsafe_allow_html=True)
@@ -89,48 +277,44 @@ html, body, [data-testid="stApp"] {
 
 MIN_PULLBACK_PCT   = 0.02
 MAX_PULLBACK_PCT   = 0.60
-AUTO_SCAN_INTERVAL = 1800
+AUTO_SCAN_INTERVAL = 1800       # 30 Minuten
 ALERT_COOLDOWN_MIN = 60
-MIN_SCORE          = 70        # Mindestens 70 für grün
-MIN_PRICE          = 5.0
-MAX_PRICE          = 50.0      # NEU: Max $50
+MIN_SCORE          = 55
+MIN_PRICE          = 5.0        # Kein Penny-Stock-Müll
 CATALYST_FILE      = "catalysts.json"
 DEAD_TICKERS_FILE  = "dead_tickers.json"
 
-# Alle Tech-Aktien ≤ $50 (typischerweise, muss geprüft werden)
-# Entfernt: LLY, ABBV, AVGO, ORCL, CRM, NOW, SNOW, TSM, MA, V, etc.
+# Nur echte Tech-Aktien – keine Crypto/Meme
 BASE_WATCHLIST = [
-    # Mega-Cap Tech (unter $50)
-    "AMD", "INTC", "PLTR", "COIN", "HOOD",
-    
-    # Semiconductors (unter $50)
-    "QCOM", "MU", "AMAT", "MRVL", "ON", "TXN", "ARM",
-    
-    # AI / Cloud (unter $50)
-    "NET", "DDOG", "MDB", "DELL", "HPE", "PSTG", "NTAP",
-    
-    # Cybersecurity (unter $50)
+    # Mega-Cap Tech
+    "AAPL", "MSFT", "NVDA", "GOOGL", "META", "AMZN", "TSLA", "AMD",
+
+    # Semiconductors
+    "AVGO", "QCOM", "MU", "AMAT", "LRCX", "KLAC", "MRVL", "ON", "TXN",
+    "INTC", "TSM", "ARM", "MPWR", "ONTO", "ENTG",
+
+    # AI / Cloud Infrastructure
+    "ORCL", "CRM", "NOW", "SNOW", "PLTR", "DDOG", "NET",
+    "MDB", "SMCI", "DELL", "HPE", "PSTG", "NTAP",
+
+    # Cybersecurity
     "CRWD", "PANW", "ZS", "FTNT", "OKTA", "TENB",
-    
-    # Software / SaaS (unter $50)
+
+    # Software / SaaS
     "ADSK", "CDNS", "TTD", "HUBS", "BILL", "MNDY", "VEEV", "PCTY", "PAYC",
-    
-    # Fintech / Payments (unter $50)
-    "AFRM", "SOFI", "PYPL",
-    
-    # Hardware / Consumer Tech (unter $50)
+
+    # Fintech / Payments
+    "COIN", "HOOD", "AFRM", "SOFI", "PYPL", "MA", "V",
+
+    # Hardware / Consumer Tech
     "ROKU", "LOGI", "STX", "WDC",
-    
-    # Quantum / Defense Tech (unter $50)
+
+    # Quantum / Defense Tech
     "QBTS", "IONQ", "RGTI", "ACHR", "JOBY",
-    
-    # Biotech (unter $50)
-    "AMGN", "GILD", "VRTX", "REGN", "BIIB", "MRNA",
-    "BMY", "PFE", "DXCM", "IDXX", "ALGN",
-    
-    # Weitere unter $50
-    "DDOG", "SNOW", "ZM", "UBER", "LYFT", "SQ", "SHOP",
-    "TWLO", "FSLY", "ESTC", "SPLK", "DOCU", "CRWD",
+
+    # Biotech Blue-Chip
+    "LLY", "ABBV", "AMGN", "GILD", "VRTX", "REGN", "BIIB", "MRNA",
+    "BMY", "PFE", "ISRG", "DXCM", "IDXX", "ALGN",
 ]
 
 # ==============================================================================
@@ -172,8 +356,8 @@ class ScanResult:
     target:        float
     rr_ratio:      float
     rvol:          float
-    rs_vs_qqq:     float
-    vol_profile:   str
+    rs_vs_qqq:     float        # Relative Strength vs QQQ
+    vol_profile:   str          # "healthy" | "distribution" | "neutral"
     reasons:       List[str]
     news:          List[Dict]   = field(default_factory=list)
     source:        SourceType   = SourceType.UNKNOWN
@@ -209,11 +393,14 @@ def load_dead_tickers() -> Set[str]:
 def save_dead_tickers(dead: Set[str]):
     save_json_file(DEAD_TICKERS_FILE, list(dead))
 
+# Globaler Fail-Counter (thread-safe, kein session_state in Threads)
 _global_fail_counts: Dict[str, int] = {}
 
 def add_dead_ticker(symbol: str):
+    """Ticker erst nach 5 fehlgeschlagenen Versuchen als tot markieren."""
     _global_fail_counts[symbol] = _global_fail_counts.get(symbol, 0) + 1
     count = _global_fail_counts[symbol]
+
     if count >= 5:
         dead = load_dead_tickers()
         dead.add(symbol)
@@ -223,6 +410,8 @@ def add_dead_ticker(symbol: str):
         except Exception:
             pass
         logger.warning(f"💀 {symbol} nach 5 Fehlern als toter Ticker gespeichert")
+    else:
+        logger.debug(f"⚠️ {symbol} Fehler {count}/5")
 
 # ==============================================================================
 # SESSION STATE
@@ -314,17 +503,26 @@ def get_market_clock() -> Dict:
 # YAHOO FINANCE CACHE
 # ==============================================================================
 
+_yf_lock = threading.Lock()
+_yf_last_call = 0.0
+_YF_DELAY = 0.3
+_YF_CACHE_TTL = 1800
+
+# Globaler In-Memory Cache (kein Streamlit session_state in Threads)
 _yf_mem_cache: Dict[str, Any] = {}
 _yf_mem_cache_ts: Dict[str, float] = {}
 _yf_fail_counts: Dict[str, int] = {}
 
 def fetch_yf(symbol: str, period: str = '3mo') -> Optional[pd.DataFrame]:
+    """Yahoo Finance fetch mit In-Memory Cache – kein Lock, thread-safe durch yfinance."""
     cache_key = f"{symbol}_{period}"
     now = time.time()
 
-    if cache_key in _yf_mem_cache and (now - _yf_mem_cache_ts.get(cache_key, 0)) < 1800:
+    # Cache-Check
+    if cache_key in _yf_mem_cache and (now - _yf_mem_cache_ts.get(cache_key, 0)) < _YF_CACHE_TTL:
         return _yf_mem_cache[cache_key]
 
+    # Dead-Ticker-Check
     if symbol in st.session_state.get('dead_tickers', set()):
         return None
 
@@ -338,6 +536,7 @@ def fetch_yf(symbol: str, period: str = '3mo') -> Optional[pd.DataFrame]:
                 add_dead_ticker(symbol)
             return None
 
+        # Pre/Post-Market Preis einsetzen
         try:
             pm = ticker.fast_info.last_price
             if pm and pm > 0:
@@ -350,10 +549,12 @@ def fetch_yf(symbol: str, period: str = '3mo') -> Optional[pd.DataFrame]:
         return df
 
     except Exception as e:
+        # Nur loggen, NICHT als tot markieren – Streamlit Cloud hat manchmal Aussetzer
         logger.debug(f"Yahoo Fehler {symbol}: {str(e)[:60]}")
         return None
 
 def get_qqq_data() -> Optional[pd.DataFrame]:
+    """QQQ Daten für Relative Strength – gecacht 1h."""
     now = time.time()
     if (st.session_state.get('qqq_data') is not None and
             now - st.session_state.get('qqq_loaded_at', 0) < 3600):
@@ -366,10 +567,111 @@ def get_qqq_data() -> Optional[pd.DataFrame]:
     return df
 
 # ==============================================================================
+# YAHOO GAINERS AUTO-IMPORT
+# ==============================================================================
+
+_gainers_cache: List[str] = []
+_gainers_cache_ts: float = 0
+_GAINERS_TTL = 1800  # 30 Minuten
+
+def fetch_yahoo_gainers(max_results: int = 25) -> List[str]:
+    """Holt Top Gainers von Yahoo Finance automatisch."""
+    global _gainers_cache, _gainers_cache_ts
+    now = time.time()
+
+    # Cache prüfen
+    if _gainers_cache and (now - _gainers_cache_ts) < _GAINERS_TTL:
+        return _gainers_cache
+
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+    }
+
+    gainers = []
+    urls = [
+        'https://finance.yahoo.com/gainers',
+        'https://finance.yahoo.com/most-active',
+    ]
+
+    for url in urls:
+        try:
+            r = requests.get(url, headers=headers, timeout=10)
+            if r.status_code != 200:
+                continue
+
+            # Symbole aus HTML extrahieren
+            import re
+            # Yahoo Finance verwendet data-symbol Attribute
+            symbols = re.findall(r'data-symbol="([A-Z]{1,5})"', r.text)
+            # Alternativ aus Tabellen
+            if not symbols:
+                from io import StringIO
+                import pandas as pd
+                try:
+                    tables = pd.read_html(StringIO(r.text))
+                    if tables:
+                        df = tables[0]
+                        if 'Symbol' in df.columns:
+                            symbols = df['Symbol'].head(max_results).tolist()
+                            symbols = [s for s in symbols if isinstance(s, str) and len(s) <= 5 and s.isalpha()]
+                except Exception:
+                    pass
+
+            # Bereinigen
+            clean = [s for s in symbols if isinstance(s, str) and 1 <= len(s) <= 5 and s.isalpha()]
+            gainers.extend(clean[:max_results])
+
+        except Exception as e:
+            logger.debug(f"Yahoo Gainers Fehler: {e}")
+
+    # Deduplizieren
+    seen = set()
+    unique = []
+    for s in gainers:
+        if s not in seen:
+            seen.add(s)
+            unique.append(s)
+
+    if unique:
+        _gainers_cache = unique[:max_results]
+        _gainers_cache_ts = now
+        logger.info(f"📈 Yahoo Gainers geladen: {len(_gainers_cache)} Ticker")
+    else:
+        logger.warning("Yahoo Gainers: Keine Daten gefunden")
+
+    return _gainers_cache
+
+
+def get_scan_universe() -> List[str]:
+    """
+    Kombiniert BASE_WATCHLIST + Catalyst + Yahoo Gainers.
+    Gainers werden priorisiert (zuerst gescannt).
+    """
+    catalysts = st.session_state.get('catalyst_list', [])
+    dead      = st.session_state.get('dead_tickers', set())
+
+    # Yahoo Gainers holen
+    gainers = fetch_yahoo_gainers(25)
+
+    # Kombinieren: Gainers zuerst, dann Watchlist
+    all_symbols = list(dict.fromkeys(gainers + catalysts + BASE_WATCHLIST))
+
+    # Tote Ticker rausfiltern
+    active = [s for s in all_symbols if s not in dead]
+
+    logger.info(f"Scan-Universum: {len(active)} Ticker ({len(gainers)} Gainers + {len(BASE_WATCHLIST)} Watchlist)")
+    return active
+
+
+# ==============================================================================
 # RELATIVE STRENGTH vs QQQ
 # ==============================================================================
 
 def calc_rs_vs_qqq(symbol_df: pd.DataFrame, qqq_df: pd.DataFrame, days: int = 20) -> float:
+    """
+    Berechnet Relative Strength: wie viel hat der Ticker über/unter QQQ performed
+    in den letzten N Tagen. Positiv = outperformance.
+    """
     try:
         sym_close = symbol_df['Close'].tail(days + 1)
         qqq_close = qqq_df['Close'].tail(days + 1)
@@ -389,6 +691,10 @@ def calc_rs_vs_qqq(symbol_df: pd.DataFrame, qqq_df: pd.DataFrame, days: int = 20
 # ==============================================================================
 
 def analyze_volume_profile(df: pd.DataFrame, pullback_start_idx: int) -> str:
+    """
+    Analysiert ob Volumen beim Pullback abnimmt (gesund) oder zunimmt (Distribution).
+    pullback_start_idx: Index des letzten Hochs
+    """
     try:
         if pullback_start_idx < 0 or len(df) < pullback_start_idx + 2:
             return "neutral"
@@ -408,9 +714,9 @@ def analyze_volume_profile(df: pd.DataFrame, pullback_start_idx: int) -> str:
         ratio = avg_pullbk / avg_pre
 
         if ratio < 0.7:
-            return "healthy"
+            return "healthy"       # Volumen nimmt ab → gesunder Pullback
         elif ratio > 1.2:
-            return "distribution"
+            return "distribution"  # Volumen steigt → Verkaufsdruck
         else:
             return "neutral"
     except Exception:
@@ -452,23 +758,29 @@ def analyze_candlestick(df: pd.DataFrame, swing_low: float, recent_high: float) 
 
     signals, strength, confirms = [], 0, 0
 
+    # Hammer
     if p3['lower'] > 0.60 and p3['body_pct'] < 0.30 and p3['bull'] and near_support:
         signals.append("HAMMER"); strength += 40
         if p3['lower'] > 0.70: strength += 10; confirms += 1
 
+    # Bullish Engulfing
     if p2['c'] < p2['o'] and p3['bull'] and p3['o'] < p2['c'] and p3['c'] > p2['o'] and p3['body'] > p2['body'] * 1.2:
         signals.append("ENGULFING"); strength += 35
         if near_support: strength += 10; confirms += 1
 
+    # Morning Star
     if p1 and p1['c'] < p1['o'] and p1['body_pct'] > 0.5 and p2['body_pct'] < 0.3 and p3['bull'] and p3['c'] > (p1['o'] + p1['c']) / 2:
         signals.append("MORNING_STAR"); strength += 45; confirms += 1
 
+    # Three White Soldiers
     if p0 and all(x['bull'] for x in [p0, p1, p2]) and p1['c'] > p0['c'] and p2['c'] > p1['c'] and all(x['body_pct'] > 0.4 for x in [p0, p1, p2]):
         signals.append("3_SOLDIERS"); strength += 50; confirms += 2
 
+    # Piercing Line
     if p2['c'] < p2['o'] and p3['bull'] and p3['o'] < p2['l'] and p3['c'] > (p2['o'] + p2['c']) / 2 and near_support:
         signals.append("PIERCING"); strength += 30
 
+    # Volume Confirmation
     avg_vol = float(df['Volume'].tail(20).mean())
     if avg_vol > 0 and float(df['Volume'].iloc[-1]) > avg_vol * 1.5:
         confirms += 1; strength += 5
@@ -644,6 +956,7 @@ def send_telegram_heartbeat(setups: int, alerts: int, elapsed: float) -> bool:
     except Exception:
         return False
 
+
 def should_alert(symbol: str, price: float, score: int) -> bool:
     alerts = st.session_state.get('sent_alerts', {})
     now = datetime.now()
@@ -704,10 +1017,11 @@ def analyze_symbol(symbol: str, qqq_df: Optional[pd.DataFrame]) -> Optional[Scan
 
     current_price = float(df_clean['Close'].iloc[-1])
 
-    # NEU: Preis-Filter $5 - $50
-    if current_price < MIN_PRICE or current_price > MAX_PRICE:
+    # Mindestpreis-Filter – kein Penny-Stock
+    if current_price < MIN_PRICE:
         return None
 
+    # Struktur-Analyse
     struct = analyze_structure(df_clean)
     if not (struct['structure_intact'] or struct['higher_lows'] or struct['higher_highs']):
         return None
@@ -718,6 +1032,7 @@ def analyze_symbol(symbol: str, qqq_df: Optional[pd.DataFrame]) -> Optional[Scan
     if last_swing_low <= 0 or last_swing_high <= 0:
         return None
 
+    # Pullback berechnen (vs. letztem Swing-High, nicht altem Allzeithoch)
     lookback   = min(60, len(df_clean) - 5)
     recent     = df_clean.tail(lookback)
     recent_high = float(recent['High'].max())
@@ -726,54 +1041,65 @@ def analyze_symbol(symbol: str, qqq_df: Optional[pd.DataFrame]) -> Optional[Scan
     if pullback < MIN_PULLBACK_PCT or pullback > MAX_PULLBACK_PCT:
         return None
 
+    # Preis nicht zu weit unter Swing Low
     if current_price < last_swing_low * 0.88:
         return None
 
+    # Relative Strength vs QQQ
     rs = calc_rs_vs_qqq(df_clean, qqq_df) if qqq_df is not None else 0.0
 
+    # Volumen-Profil
     high_idx    = struct.get('high_idx', -1)
     vol_profile = analyze_volume_profile(df_clean, high_idx)
 
+    # Candlestick
     candle = analyze_candlestick(df_clean, last_swing_low, recent_high)
 
+    # Score berechnen
     score = 30
 
     if struct['structure_intact']:  score += 15
     elif struct['higher_lows']:     score += 10
     elif struct['higher_highs']:    score += 6
 
+    # RS Bonus/Malus
     if rs > 5:    score += 18
     elif rs > 2:  score += 12
     elif rs > 0:  score += 6
     elif rs < -5: score -= 10
     elif rs < -2: score -= 5
 
+    # Volumen-Profil
     if vol_profile == "healthy":      score += 15
     elif vol_profile == "distribution": score -= 10
 
+    # RVol
     avg_vol    = float(df_clean['Volume'].mean())
     curr_vol   = float(df_clean['Volume'].iloc[-1])
     rvol       = curr_vol / avg_vol if avg_vol > 0 else 1.0
     if rvol > 2:    score += 15
     elif rvol > 1:  score += 8
 
+    # Support-Nähe
     support_dist = (current_price - last_swing_low) / current_price if current_price > 0 else 1.0
     if support_dist < 0.03: score += 12
     elif support_dist < 0.08: score += 6
 
+    # Candlestick
     if candle.strength >= 50:
         score += candle.strength // 5
         if candle.confirmation: score += 8
 
+    # News (nur bei hohem Score)
     news = []
     if score >= 60 and FINNHUB_KEYS:
         news = get_news(symbol)
         if news: score += 8
 
-    # NEU: Nur Score ≥ 70 anzeigen
     if score < MIN_SCORE:
         return None
 
+    # Stop Loss & Target
     try:
         atr = float((df_clean['High'].rolling(14).max() - df_clean['Low'].rolling(14).min()).mean())
         if not np.isfinite(atr) or atr <= 0:
@@ -791,6 +1117,7 @@ def analyze_symbol(symbol: str, qqq_df: Optional[pd.DataFrame]) -> Optional[Scan
     if rr_ratio < 0.8:
         return None
 
+    # Reasons
     reasons = [f"📉 -{pullback*100:.1f}%"]
     if struct['structure_intact']:  reasons.append("📈 HH+HL")
     elif struct['higher_lows']:     reasons.append("📈 HL")
@@ -802,6 +1129,7 @@ def analyze_symbol(symbol: str, qqq_df: Optional[pd.DataFrame]) -> Optional[Scan
     if candle.strength >= 50: reasons.append(f"🕯 {candle.pattern.value}")
     if news: reasons.append("📰 News")
 
+    # Source
     source = SourceType.WATCHLIST
     if symbol in st.session_state.get('catalyst_list', []):
         source = SourceType.CATALYST
@@ -858,106 +1186,88 @@ def run_scan(symbols: List[str]) -> List[ScanResult]:
     return sorted(results, key=lambda x: x.score, reverse=True)
 
 # ==============================================================================
-# CARD RENDERER - MIT FARBIGER UMRAHMUNG
+# CARD RENDERER
 # ==============================================================================
 
 def render_card(r: ScanResult):
-    """Render a result card with colored border based on score"""
-    
-    # Farb-Logik
-    if r.score >= 90:
-        border_color = "#FFD700"  # Gold
-        bg_color = "#1a1a0a"
-        header_color = "#FFD700"
-        quality_text = "🥇 ELITE"
-    elif r.score >= 70:
-        border_color = "#00ff88"  # Grün
-        bg_color = "#0a1a0f"
-        header_color = "#00ff88"
-        quality_text = "🟢 STRONG"
-    else:
-        return  # Sollte nicht passieren wegen Filter, aber sicherheitshalber
-    
-    rs_str = f"+{r.rs_vs_qqq:.1f}%" if r.rs_vs_qqq >= 0 else f"{r.rs_vs_qqq:.1f}%"
-    
-    # Source badge
-    src_emoji = "📋" if r.source.value == "watchlist" else "🧬" if r.source.value == "catalyst" else "🚀"
-    
-    # Volume emoji
-    vol_emoji = "✅" if r.vol_profile == "healthy" else "⚠️" if r.vol_profile == "distribution" else "➖"
-    
-    # Container mit farbigem Rand
-    with st.container():
-        # HTML-Wrapper für farbigen Rand
-        st.markdown(f"""
-        <div style="
-            background: linear-gradient(145deg, {bg_color} 0%, #0d1117 100%);
-            border: 2px solid {border_color};
-            border-radius: 12px;
-            padding: 16px;
-            margin: 8px 0;
-            box-shadow: 0 4px 12px {border_color}33;
-        ">
-        """, unsafe_allow_html=True)
-        
-        # Header: Symbol + Qualität
-        c1, c2, c3 = st.columns([2, 1, 1])
-        with c1:
-            st.markdown(f"<h3 style='color: {header_color}; margin: 0; font-family: Syne, sans-serif;'>{r.symbol}</h3>", unsafe_allow_html=True)
-        with c2:
-            st.markdown(f"<p style='color: {border_color}; font-weight: bold; margin: 0;'>{quality_text}</p>", unsafe_allow_html=True)
-        with c3:
-            st.caption(f"{src_emoji} ${r.price:.2f}")
-        
-        # Progress bar für Score
-        st.progress(r.score / 100, text=f"Score: {r.score}/100")
-        
-        # Key Metrics in 4 Spalten
-        m1, m2, m3, m4 = st.columns(4)
-        with m1:
-            st.metric("Pullback", f"-{r.pullback_pct*100:.1f}%", delta=None)
-        with m2:
-            delta_color = "normal" if r.rs_vs_qqq >= 0 else "inverse"
-            st.metric("RS vs QQQ", rs_str, delta=None)
-        with m3:
-            st.metric("R:R", f"{r.rr_ratio:.1f}x")
-        with m4:
-            st.metric("RVol", f"{r.rvol:.1f}x")
-        
-        # SL / TP
-        sl_col, tp_col = st.columns(2)
-        with sl_col:
-            st.error(f"🛑 SL ${r.stop_loss:.2f}")
-        with tp_col:
-            st.success(f"🎯 TP ${r.target:.2f}")
-        
-        # Details
-        with st.expander("Details"):
-            st.caption("**Technische Indikatoren:**")
-            st.write(f"• Struktur: {'📈 HH+HL' if r.structure_intact else '📈 HL'}")
-            st.write(f"• Volumen: {vol_emoji} {r.vol_profile.title()}")
-            if r.candlestick.pattern != CandlestickPattern.NONE:
-                st.write(f"• Candlestick: 🕯 {r.candlestick.pattern.value.upper()} ({r.candlestick.strength}/100)")
-            
-            st.caption("**Signale:**")
-            st.write(" | ".join(r.reasons[:5]))
-            
-            if r.news:
-                n = r.news[0]
-                st.caption("**News:**")
-                st.link_button(f"📰 {n['title'][:40]}...", n.get('url', f"https://finance.yahoo.com/quote/{r.symbol}"), use_container_width=True)
-        
-        # Links
-        st.link_button("📈 TradingView", f"https://www.tradingview.com/chart/?symbol={r.symbol}", use_container_width=True)
-        
-        # Gemini Button
-        if st.button(f"🤖 Gemini", key=f"gem_{r.symbol}_{random.randint(1000,9999)}", use_container_width=True):
-            with st.spinner(f"Analysiere {r.symbol}..."):
-                analysis = gemini_analysis(r)
-                st.info(analysis, icon="💡")
-        
-        # Schließender Div
-        st.markdown("</div>", unsafe_allow_html=True)
+    score_color = '#FFD700' if r.score >= 85 else '#00ff88' if r.score >= 70 else '#58a6ff'
+    card_class  = 'bull-card gold' if r.score >= 85 else 'bull-card'
+    rs_class    = 'rs-positive' if r.rs_vs_qqq >= 0 else 'rs-negative'
+    rs_str      = f"+{r.rs_vs_qqq:.1f}%" if r.rs_vs_qqq >= 0 else f"{r.rs_vs_qqq:.1f}%"
+    vol_badge   = {'healthy': ('badge-green', '✅ Healthy Vol'), 'distribution': ('badge-red', '⚠️ Distribution'), 'neutral': ('badge-gray', '➖ Vol Neutral')}.get(r.vol_profile, ('badge-gray', '➖'))
+    src_badge   = {'watchlist': ('badge-blue', '📋 WL'), 'catalyst': ('badge-yellow', '🧬 CATALYST'), 'gainers': ('badge-green', '🚀 GAINER')}.get(r.source.value, ('badge-gray', '📊'))
+    has_candle  = r.candlestick.pattern != CandlestickPattern.NONE
+
+    news_html = ""
+    if r.news:
+        n = r.news[0]
+        url = n.get('url') or f"https://finance.yahoo.com/quote/{r.symbol}"
+        news_html = f'<a href="{url}" target="_blank" class="link-btn">📰 {n["title"][:45]}...</a>'
+
+    candle_html = ""
+    if has_candle:
+        c_color = '#00ff88' if r.candlestick.strength >= 65 else '#FFD700'
+        candle_html = f'<span class="badge" style="background:#0a1a0a;color:{c_color};border:1px solid {c_color}44;">🕯 {r.candlestick.pattern.value.upper()} {r.candlestick.strength}/100</span>'
+
+    struct_html = '<span class="badge badge-green">📈 HH+HL</span>' if r.structure_intact else '<span class="badge badge-gray">📈 HL</span>'
+
+    reasons_html = ' '.join([f'<span class="badge badge-gray">{x}</span>' for x in r.reasons[:5]])
+
+    vol_pct = min(100, int(r.rvol / 3 * 100))
+    vol_color = '#00ff88' if r.rvol > 1.5 else '#FFD700' if r.rvol > 1 else '#8b949e'
+
+    st.markdown(f"""
+    <div class="{card_class}">
+        <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:10px;">
+            <span class="card-symbol">{r.symbol}</span>
+            <span class="badge {src_badge[0]}">{src_badge[1]}</span>
+        </div>
+
+        <div class="price-display">${r.price:.2f}</div>
+
+        <div style="margin:6px 0;">
+            {struct_html}
+            <span class="badge {vol_badge[0]}">{vol_badge[1]}</span>
+            {candle_html}
+        </div>
+
+        <div class="metric-row">
+            <div class="metric-item">Pullback<span>-{r.pullback_pct*100:.1f}%</span></div>
+            <div class="metric-item">RS vs QQQ<span class="{rs_class}">{rs_str}</span></div>
+            <div class="metric-item">R:R<span>{r.rr_ratio:.1f}x</span></div>
+            <div class="metric-item">RVol<span>{r.rvol:.1f}x</span></div>
+        </div>
+
+        <div class="volume-bar">
+            <span>Vol</span>
+            <div class="volume-bar-inner">
+                <div class="volume-bar-fill" style="width:{vol_pct}%;background:{vol_color};"></div>
+            </div>
+            <span>{r.rvol:.1f}x</span>
+        </div>
+
+        <div class="sl-tp-row">
+            <div class="sl-badge">🛑 SL ${r.stop_loss:.2f}</div>
+            <div class="tp-badge">🎯 TP ${r.target:.2f}</div>
+        </div>
+
+        <div style="font-size:0.72rem;color:{score_color};font-weight:700;margin:6px 0;">
+            Score: {r.score}/100
+        </div>
+        <div class="score-bar-bg">
+            <div class="score-bar-fill" style="width:{r.score}%;background:{score_color};"></div>
+        </div>
+
+        <div style="margin:8px 0;">{reasons_html}</div>
+
+        {news_html}
+        <a href="https://www.tradingview.com/chart/?symbol={r.symbol}" target="_blank" class="link-btn">📈 TradingView</a>
+    </div>
+    """, unsafe_allow_html=True)
+
+    if st.button(f"🤖 Gemini", key=f"gem_{r.symbol}_{random.randint(1000,9999)}"):
+        with st.spinner(f"Analysiere {r.symbol}..."):
+            st.info(gemini_analysis(r), icon="💡")
 
 # ==============================================================================
 # MAIN UI
@@ -970,9 +1280,9 @@ def main():
     progress_html = ""
     if clock.get('progress'):
         pct = int(clock['progress'] * 100)
-        progress_html = f'<div style="width:100%;height:2px;background:#21262d;border-radius:1px;margin-top:12px;"><div style="width:{pct}%;height:100%;background:#00ff88;border-radius:1px;"></div></div>'
+        progress_html = f'<div style="width:100%;height:2px;background:#21262d;border-radius:1px;margin-top:12px;"><div style="width:{pct}%;height:100%;background:#00ff88;border-radius:1px;transition:width 1s;"></div></div>'
 
-    st.markdown(f'''
+    st.markdown(f"""
     <div class="clock-display">
         <div class="clock-time">{clock['time']}</div>
         <div style="margin:10px 0;">
@@ -983,7 +1293,7 @@ def main():
         <div style="color:#8b949e;font-size:0.9rem;">{clock['countdown']}</div>
         {progress_html}
     </div>
-    ''', unsafe_allow_html=True)
+    """, unsafe_allow_html=True)
 
     # ── SIDEBAR ──────────────────────────────────────────────────────────────
     with st.sidebar:
@@ -997,21 +1307,30 @@ def main():
             if last:
                 age = (datetime.now() - last).total_seconds()
                 remaining = max(0, AUTO_SCAN_INTERVAL - age)
-                st.markdown(f'<div style="padding:10px 16px;border-radius:8px;font-size:0.85rem;margin:8px 0;font-weight:700;background:#0a2918;color:#00ff88;border:1px solid #00ff8844;">✅ AN – nächster Scan in {int(remaining//60)}:{int(remaining%60):02d}</div>', unsafe_allow_html=True)
+                st.markdown(f'<div class="autopilot-status autopilot-on">✅ AN – nächster Scan in {int(remaining//60)}:{int(remaining%60):02d}</div>', unsafe_allow_html=True)
             else:
-                st.markdown('<div style="padding:10px 16px;border-radius:8px;font-size:0.85rem;margin:8px 0;font-weight:700;background:#0a2918;color:#00ff88;border:1px solid #00ff8844;">✅ AN – erster Scan läuft gleich</div>', unsafe_allow_html=True)
+                st.markdown('<div class="autopilot-status autopilot-on">✅ AN – erster Scan läuft gleich</div>', unsafe_allow_html=True)
         else:
-            st.markdown('<div style="padding:10px 16px;border-radius:8px;font-size:0.85rem;margin:8px 0;font-weight:700;background:#161b22;color:#8b949e;border:1px solid #21262d;">⏸ AUS</div>', unsafe_allow_html=True)
+            st.markdown('<div class="autopilot-status autopilot-off">⏸ AUS</div>', unsafe_allow_html=True)
 
         st.divider()
 
-        # Info Box
-        st.info("""
-        **Filter aktiv:**
-        • Preis: $5 - $50
-        • Score: ≥70 (Grün)
-        • Score: ≥90 (Gold)
-        """)
+        # Gainers Status
+        st.markdown("### 📈 Yahoo Gainers")
+        gainers_now = _gainers_cache if _gainers_cache else []
+        if gainers_now:
+            st.success(f"✅ {len(gainers_now)} Gainers geladen")
+            with st.expander("Anzeigen"):
+                st.write(", ".join(gainers_now[:20]))
+        else:
+            st.warning("Noch nicht geladen")
+
+        if st.button("🔄 Gainers laden", use_container_width=True):
+            global _gainers_cache_ts
+            _gainers_cache_ts = 0
+            fresh = fetch_yahoo_gainers(25)
+            st.success(f"✅ {len(fresh)} Gainers!") if fresh else st.error("Fehler")
+            st.rerun()
 
         st.divider()
 
@@ -1037,6 +1356,14 @@ def main():
 
         st.divider()
 
+        # Filter
+        st.markdown("### 🎛 Filter")
+        min_score_ui = st.slider("Min Score", 40, 85, MIN_SCORE)
+        min_rs_ui    = st.slider("Min RS vs QQQ (%)", -10, 10, -5)
+        vol_filter   = st.selectbox("Volumen-Profil", ["Alle", "Nur Healthy", "Kein Distribution"])
+
+        st.divider()
+
         # Dead Tickers
         dead = st.session_state.get('dead_tickers', set())
         if dead:
@@ -1052,18 +1379,17 @@ def main():
 
         # Manuelle Analyse
         st.markdown("### 🔍 Einzelanalyse")
-        manual = st.text_input("Symbol:", placeholder="z.B. AMD").upper()
+        manual = st.text_input("Symbol:", placeholder="z.B. NVDA").upper()
         if st.button("Analysieren") and manual:
             with st.spinner(f"Analysiere {manual}..."):
                 qqq = get_qqq_data()
                 r   = analyze_symbol(manual, qqq)
                 if r:
-                    color = "🥇 GOLD" if r.score >= 90 else "🟢 GRÜN"
-                    st.success(f"{color} | Score: {r.score}/100 | ${r.price:.2f}")
+                    st.success(f"Score: {r.score}/100 | RS: {r.rs_vs_qqq:+.1f}% | R:R {r.rr_ratio:.1f}x")
                 else:
-                    st.error("Kein Setup gefunden (Preis >$50 oder Score <70)")
+                    st.error("Kein Setup gefunden")
 
-    # ── AUTO-TRIGGER ──────────────────────────────────────────────────────────
+    # ── AUTO-TRIGGER (FIX) ────────────────────────────────────────────────────
     scan_triggered = False
 
     if st.session_state.get('auto_refresh'):
@@ -1073,6 +1399,7 @@ def main():
         elif (datetime.now() - last).total_seconds() >= AUTO_SCAN_INTERVAL:
             scan_triggered = True
         else:
+            # Countdown anzeigen und nach 5s neu laden
             age       = (datetime.now() - last).total_seconds()
             remaining = max(0, AUTO_SCAN_INTERVAL - age)
             mins = int(remaining // 60)
@@ -1095,11 +1422,9 @@ def main():
 
     # ── RUN SCAN ──────────────────────────────────────────────────────────────
     if scan_triggered:
-        dead      = st.session_state.get('dead_tickers', set())
-        catalysts = st.session_state.get('catalyst_list', [])
-        symbols   = list({s for s in (BASE_WATCHLIST + catalysts) if s not in dead})
+        symbols = get_scan_universe()
 
-        progress_bar = st.progress(0, text=f"🔍 Scanne {len(symbols)} Symbole (Preis-Filter: $5-$50)...")
+        progress_bar = st.progress(0, text=f"🔍 Scanne {len(symbols)} Symbole...")
         status_text  = st.empty()
 
         completed = [0]
@@ -1154,32 +1479,34 @@ def main():
         progress_bar.empty()
         status_text.empty()
 
-        # KEINE zusätzlichen Filter mehr nötig, da analyze_symbol bereits filtert
-        filtered = results
+        # Filter anwenden
+        filtered = [r for r in results if r.score >= min_score_ui]
+        if min_rs_ui > -10:
+            filtered = [r for r in filtered if r.rs_vs_qqq >= min_rs_ui]
+        if vol_filter == "Nur Healthy":
+            filtered = [r for r in filtered if r.vol_profile == "healthy"]
+        elif vol_filter == "Kein Distribution":
+            filtered = [r for r in filtered if r.vol_profile != "distribution"]
 
-        st.session_state['scan_results']  = filtered
-        st.session_state['last_scan_time'] = datetime.now()
+            st.session_state['scan_results']  = filtered
+            st.session_state['last_scan_time'] = datetime.now()
 
-        # Alerts senden (nur für Gold)
-        alerts_sent = 0
-        for r in filtered:
-            if r.score >= 90 and should_alert(r.symbol, r.price, r.score):
-                if send_telegram(r):
-                    record_alert(r.symbol, r.price, r.score)
-                    alerts_sent += 1
+            # Alerts senden
+            alerts_sent = 0
+            for r in filtered[:10]:
+                if should_alert(r.symbol, r.price, r.score):
+                    if send_telegram(r):
+                        record_alert(r.symbol, r.price, r.score)
+                        alerts_sent += 1
 
-        # Stündlicher Heartbeat
-        last_hb = st.session_state.get("last_heartbeat")
-        now_hb  = datetime.now()
-        if last_hb is None or (now_hb - last_hb).total_seconds() >= 3600:
-            send_telegram_heartbeat(len(filtered), alerts_sent, elapsed)
-            st.session_state["last_heartbeat"] = now_hb
+            # Stündlicher Heartbeat
+            last_hb = st.session_state.get("last_heartbeat")
+            now_hb  = datetime.now()
+            if last_hb is None or (now_hb - last_hb).total_seconds() >= 3600:
+                send_telegram_heartbeat(len(filtered), alerts_sent, elapsed)
+                st.session_state["last_heartbeat"] = now_hb
 
-        # Ergebnis-Zusammenfassung
-        gold_count = sum(1 for r in filtered if r.score >= 90)
-        green_count = sum(1 for r in filtered if 70 <= r.score < 90)
-        
-        st.success(f"✅ {len(filtered)} Setups | 🥇 {gold_count} Gold | 🟢 {green_count} Grün | {alerts_sent} Alerts")
+            st.success(f"✅ {len(filtered)} Setups in {elapsed:.1f}s | {alerts_sent} Alerts gesendet")
 
     # ── RESULTS ───────────────────────────────────────────────────────────────
     results = st.session_state.get('scan_results', [])
@@ -1187,48 +1514,39 @@ def main():
     if results:
         last_scan = st.session_state.get('last_scan_time')
         if last_scan:
-            st.caption(f"Letzter Scan: {last_scan.strftime('%H:%M:%S')}")
+            st.caption(f"Letzter Scan: {last_scan.strftime('%H:%M:%S')} · {len(results)} Setups")
 
-        # Stats
-        gold_results = [r for r in results if r.score >= 90]
-        green_results = [r for r in results if 70 <= r.score < 90]
-        
+        # Stats Row
+        avg_rs   = np.mean([r.rs_vs_qqq for r in results])
+        avg_rr   = np.mean([r.rr_ratio for r in results])
+        healthy  = sum(1 for r in results if r.vol_profile == "healthy")
+        with_can = sum(1 for r in results if r.candlestick.pattern != CandlestickPattern.NONE)
+
         c1, c2, c3, c4 = st.columns(4)
-        c1.metric("🥇 Gold Setups", len(gold_results))
-        c2.metric("🟢 Grün Setups", len(green_results))
-        c3.metric("Ø Score", f"{np.mean([r.score for r in results]):.0f}")
-        c4.metric("Ø Preis", f"${np.mean([r.price for r in results]):.2f}")
+        c1.metric("Setups",        len(results))
+        c2.metric("Ø RS vs QQQ",  f"{avg_rs:+.1f}%")
+        c3.metric("Ø R:R",        f"{avg_rr:.1f}x")
+        c4.metric("Healthy Vol",  f"{healthy}/{len(results)}")
 
         st.divider()
 
-        # Gold zuerst anzeigen
-        if gold_results:
-            st.markdown("### 🥇 GOLD SETUPS (Score ≥90)")
-            cols = st.columns(3)
-            for i, r in enumerate(gold_results[:9]):
-                with cols[i % 3]:
-                    render_card(r)
-        
-        if green_results:
-            st.markdown("### 🟢 GRÜNE SETUPS (Score 70-89)")
-            cols = st.columns(3)
-            for i, r in enumerate(green_results[:12]):
-                with cols[i % 3]:
-                    render_card(r)
+        cols = st.columns(3)
+        for i, r in enumerate(results[:15]):
+            with cols[i % 3]:
+                render_card(r)
 
     else:
-        st.markdown('''
+        st.markdown("""
         <div style="text-align:center;padding:60px 20px;color:#8b949e;">
             <div style="font-size:3rem;margin-bottom:16px;">🐂</div>
             <div style="font-family:'Syne',sans-serif;font-size:1.2rem;color:#e6edf3;">
                 Bereit zum Scannen
             </div>
             <div style="margin-top:8px;font-size:0.85rem;">
-                Klicke "SCAN STARTEN" für Setups $5-$50<br>
-                🥇 Gold (≥90) | 🟢 Grün (70-89)
+                Klicke "SCAN STARTEN" oder aktiviere den Autopilot
             </div>
         </div>
-        ''', unsafe_allow_html=True)
+        """, unsafe_allow_html=True)
 
     # Auto-Rerun für Clock-Update
     if clock.get('is_open'):
